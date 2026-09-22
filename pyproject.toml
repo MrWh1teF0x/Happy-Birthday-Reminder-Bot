@@ -1,0 +1,52 @@
+[project]
+name = "happy-birthday-reminder-bot"
+version = "0.1.0"
+description = "Телеграм-бот для уведомлений о днях рождения за неделю"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [
+    { name = "MrWh1teF0x" }
+]
+keywords = ["telegram", "bot", "birthday", "reminder"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Framework :: AsyncIO",
+]
+
+dependencies = [
+    # Telegram Bot framework (async, современный API)
+    "aiogram>=3.13,<4.0",
+    # Планировщик для ежедневной проверки дней рождения
+    "apscheduler>=3.10",
+    # БД для хранения людей и дат рождения
+    "sqlalchemy>=2.0",
+    "aiosqlite>=0.20",
+    # Настройки и валидация конфига (.env -> BOT_TOKEN и т.д.)
+    "pydantic>=2.0",
+    "pydantic-settings>=2.0",
+    "python-dotenv>=1.0",
+    # Удобная работа с датами (парсинг "12.05.2000", расчет "за неделю")
+    "python-dateutil>=2.8",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.6",
+]
+
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["bot*", "app*"]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 100
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
