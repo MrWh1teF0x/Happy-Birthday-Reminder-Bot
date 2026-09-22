@@ -33,6 +33,20 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
     "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "ruff>=0.6",
+    "mypy>=1.10",
+    "pre-commit>=3.5",
+    "poethepoet>=0.32",
+]
+
+[dependency-groups]
+dev = [
+    "mypy>=1.10",
+    "poethepoet>=0.32",
+    "pre-commit>=3.5",
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
     "ruff>=0.6",
 ]
 
@@ -47,6 +61,35 @@ include = ["bot*", "app*"]
 target-version = "py310"
 line-length = 100
 
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "W"]
+ignore = []
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+
+[tool.mypy]
+python_version = "3.10"
+strict = false
+ignore_missing_imports = true
+show_error_codes = true
+plugins = []
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+
+[tool.poe.tasks]
+test = "pytest -v"
+lint = "ruff check ."
+fmt = "ruff format ."
+fmt-check = "ruff format --check ."
+typecheck = "mypy ."
+check = [
+    { cmd = "ruff check ." },
+    { cmd = "ruff format --check ." },
+    { cmd = "pytest -q" },
+]
+precommit = "pre-commit run --all-files"
+install-hooks = "pre-commit install"
