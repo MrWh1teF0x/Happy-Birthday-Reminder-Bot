@@ -1,0 +1,14 @@
+.venv
+__pycache__
+*.pyc
+*.pyo
+.git
+.env
+.env.*
+!.env.example
+.pytest_cache
+.ruff_cache
+.mypy_cache
+tests
+*.egg-info
+happy_birthday_reminder_bot.egg-info
