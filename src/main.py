@@ -3,6 +3,7 @@ import logging
 from pathlib import Path
 
 from aiogram import Bot, Dispatcher
+from aiogram.fsm.storage.memory import MemoryStorage
 from alembic import command
 from alembic.config import Config
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -22,7 +23,7 @@ async def main() -> None:
     settings = Settings()  # type: ignore[call-arg]  # поля подставляются из окружения/.env
     await asyncio.to_thread(run_migrations)
     bot = Bot(token=settings.bot_token)
-    dispatcher = Dispatcher()
+    dispatcher = Dispatcher(storage=MemoryStorage())
     engine = build_engine(settings.database_url)
     session_factory = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
     dispatcher.update.middleware(DbSessionMiddleware(session_factory))
