@@ -8,3 +8,8 @@ class TimezoneStates(StatesGroup):
 class BirthdayStates(StatesGroup):
     waiting_for_fullname = State()
     waiting_for_date = State()
+
+
+class EditBirthdayStates(StatesGroup):
+    choosing_field = State()
+    waiting_for_value = State()
