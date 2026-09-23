@@ -55,3 +55,7 @@ def precommit() -> None:
 
 def install_hooks() -> None:
     _run(PYTHON, "-m", "pre_commit", "install")
+
+
+def migrate() -> None:
+    _run(PYTHON, "-m", "alembic", "upgrade", "head")

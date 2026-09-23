@@ -1,6 +1,6 @@
 from pytest import MonkeyPatch
 
-from src.config import Settings
+from src.config.config import Settings
 
 
 def test_settings_reads_token_from_env(monkeypatch: MonkeyPatch) -> None:

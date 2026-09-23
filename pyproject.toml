@@ -29,6 +29,7 @@ dependencies = [
     "python-dotenv>=1.0",
     # Удобная работа с датами (парсинг "12.05.2000", расчет "за неделю")
     "python-dateutil>=2.8",
+    "alembic>=1.20.0",
 ]
 
 [project.optional-dependencies]
@@ -43,14 +44,15 @@ dev = [
 [project.scripts]
 bot = "src.main:run"
 run = "src.main:run"
-test = "src.tasks:test"
-lint = "src.tasks:lint"
-fmt = "src.tasks:fmt"
-fmt-check = "src.tasks:fmt_check"
-typecheck = "src.tasks:typecheck"
-check = "src.tasks:check"
-precommit = "src.tasks:precommit"
-install-hooks = "src.tasks:install_hooks"
+test = "src.dev.tasks:test"
+lint = "src.dev.tasks:lint"
+fmt = "src.dev.tasks:fmt"
+fmt-check = "src.dev.tasks:fmt_check"
+typecheck = "src.dev.tasks:typecheck"
+check = "src.dev.tasks:check"
+precommit = "src.dev.tasks:precommit"
+install-hooks = "src.dev.tasks:install_hooks"
+migrate = "src.dev.tasks:migrate"
 
 [dependency-groups]
 dev = [

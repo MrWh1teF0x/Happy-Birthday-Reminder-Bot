@@ -9,6 +9,8 @@ ENV PYTHONUNBUFFERED=1 \
     UV_COMPILE_BYTECODE=1
 
 COPY pyproject.toml uv.lock README.md ./
+COPY alembic.ini ./alembic.ini
+COPY src/database/migrations ./src/database/migrations
 COPY src ./src
 
 RUN uv sync --locked --no-dev && \
