@@ -22,6 +22,7 @@ dependencies = [
     # БД для хранения людей и дат рождения
     "sqlalchemy>=2.0",
     "aiosqlite>=0.20",
+    "asyncpg>=0.29",
     # Настройки и валидация конфига (.env -> BOT_TOKEN и т.д.)
     "pydantic>=2.0",
     "pydantic-settings>=2.0",

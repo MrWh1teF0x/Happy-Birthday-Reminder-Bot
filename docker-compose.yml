@@ -4,4 +4,30 @@ services:
     container_name: birthday-bot
     env_file:
       - .env
+    environment:
+      DB_URL: "postgresql+asyncpg://${DB_USER:-bot}:${DB_PASSWORD:-bot}@db:5432/${DB_NAME:-birthday_bot}"
+    depends_on:
+      db:
+        condition: service_healthy
     restart: unless-stopped
+
+  db:
+    image: postgres:17-alpine
+    container_name: birthday-db
+    environment:
+      POSTGRES_USER: ${DB_USER:-bot}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-bot}
+      POSTGRES_DB: ${DB_NAME:-birthday_bot}
+    ports:
+      - "127.0.0.1:${DB_HOST_PORT:-5437}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-bot} -d ${DB_NAME:-birthday_bot}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  pgdata:
