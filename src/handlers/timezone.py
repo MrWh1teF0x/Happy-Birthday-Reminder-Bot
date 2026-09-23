@@ -3,6 +3,7 @@
 from zoneinfo import ZoneInfo
 
 from aiogram import F, Router
+from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -41,6 +42,17 @@ async def request_timezone(message: Message, current: str | None = None) -> None
     if current:
         text = f"Текущий часовой пояс: `{current}`.\n\n{text}"
     await message.answer(text, reply_markup=build_timezone_keyboard(), parse_mode="Markdown")
+
+
+@router.message(Command("edit_utc"))
+async def edit_utc_handler(message: Message, db: AsyncSession, state: FSMContext) -> None:
+    if message.from_user is None:
+        return
+    user = await UserRepository(db).get_or_create(
+        message.from_user.id, username=message.from_user.username
+    )
+    await state.set_state(TimezoneStates.waiting_for_timezone)
+    await request_timezone(message, current=user.time_zone)
 
 
 @router.callback_query(

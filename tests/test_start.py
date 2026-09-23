@@ -15,6 +15,7 @@ from src.handlers import router, start_handler
 from src.handlers.start import router as start_router
 from src.handlers.states import TimezoneStates
 from src.handlers.timezone import (
+    edit_utc_handler,
     is_valid_timezone,
     save_timezone_and_seed_reminder,
     timezone_button_handler,
@@ -129,6 +130,19 @@ async def test_save_timezone_requires_registered_user() -> None:
     async for session in make_session():
         with raises(ValueError, match="not registered"):
             await save_timezone_and_seed_reminder(session, 999, "UTC")
+
+
+async def test_edit_utc_shows_current_zone_and_sets_state() -> None:
+    async for session in make_session():
+        await UserRepository(session).get_or_create(123, time_zone="Asia/Almaty")
+        message = make_message("/edit_utc")
+        state = AsyncMock()
+
+        await edit_utc_handler(message, session, state)
+
+        state.set_state.assert_awaited_once_with(TimezoneStates.waiting_for_timezone)
+        prompt = message.answer.await_args.args[0]
+        assert "Asia/Almaty" in prompt
 
 
 def test_routers_are_included_in_root_router() -> None:
