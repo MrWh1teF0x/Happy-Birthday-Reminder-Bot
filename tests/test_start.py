@@ -81,6 +81,7 @@ async def test_timezone_button_saves_zone_and_seeds_default_reminder() -> None:
         callback.answer = AsyncMock()
         callback.data = "tz:Europe/Moscow"
         callback.from_user.id = 123
+        callback.from_user.username = "owner"
         callback.message.edit_text = AsyncMock()
         state = AsyncMock()
 
@@ -125,12 +126,12 @@ def test_is_valid_timezone() -> None:
     assert is_valid_timezone("Not/AZone") is False
 
 
-async def test_save_timezone_requires_registered_user() -> None:
-    from pytest import raises
-
+async def test_save_timezone_registers_missing_user() -> None:
     async for session in make_session():
-        with raises(ValueError, match="not registered"):
-            await save_timezone_and_seed_reminder(session, 999, "UTC")
+        await save_timezone_and_seed_reminder(session, 999, "UTC")
+
+        user = await UserRepository(session).get_by_tg_id(999)
+        assert user is not None and user.time_zone == "UTC"
 
 
 async def test_edit_utc_shows_current_zone_and_sets_state() -> None:

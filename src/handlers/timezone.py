@@ -23,11 +23,12 @@ def is_valid_timezone(zone: str) -> bool:
     return True
 
 
-async def save_timezone_and_seed_reminder(db: AsyncSession, tg_id: int, zone: str) -> None:
+async def save_timezone_and_seed_reminder(
+    db: AsyncSession, tg_id: int, zone: str, username: str | None = None
+) -> None:
     """Сохраняет зону и создаёт оповещение «за 7 дней в 09:00», если их ещё нет."""
     users = UserRepository(db)
-    if await users.get_by_tg_id(tg_id) is None:
-        raise ValueError(f"user {tg_id} is not registered")
+    await users.get_or_create(tg_id, username=username)
     await users.set_time_zone(tg_id, zone)
     settings = UserSettingRepository(db)
     if not await settings.list_by_user(tg_id):
@@ -55,9 +56,9 @@ async def edit_utc_handler(message: Message, db: AsyncSession, state: FSMContext
     await request_timezone(message, current=user.time_zone)
 
 
-@router.callback_query(
-    TimezoneStates.waiting_for_timezone, F.data.startswith(TIMEZONE_CALLBACK_PREFIX)
-)
+# Без фильтра состояния: кнопка должна срабатывать, даже если бот
+# перезапускался и FSM-состояние слетело.
+@router.callback_query(F.data.startswith(TIMEZONE_CALLBACK_PREFIX))
 async def timezone_button_handler(
     callback: CallbackQuery, db: AsyncSession, state: FSMContext
 ) -> None:
@@ -65,9 +66,11 @@ async def timezone_button_handler(
     if not is_valid_timezone(zone) or callback.from_user is None:
         await callback.answer("Неизвестный часовой пояс.", show_alert=True)
         return
-    await save_timezone_and_seed_reminder(db, callback.from_user.id, zone)
-    await state.clear()
     await callback.answer()
+    await save_timezone_and_seed_reminder(
+        db, callback.from_user.id, zone, username=callback.from_user.username
+    )
+    await state.clear()
     if isinstance(callback.message, Message):
         await callback.message.edit_text(
             f"Готово! Часовой пояс — `{zone}`. Буду присылать оповещения за 7 дней в 09:00. "

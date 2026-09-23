@@ -207,7 +207,9 @@ async def birthday_edit_button_handler(
     )
 
 
-@router.callback_query(EditBirthdayStates.choosing_field, F.data.startswith(FIELD_PREFIX))
+# Без фильтра состояния: person_id уже зашит в callback_data,
+# состояние выставляется заново внутри хендлера.
+@router.callback_query(F.data.startswith(FIELD_PREFIX))
 async def birthday_field_handler(
     callback: CallbackQuery, db: AsyncSession, state: FSMContext
 ) -> None:

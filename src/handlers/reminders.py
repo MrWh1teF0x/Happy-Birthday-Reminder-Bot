@@ -219,7 +219,9 @@ async def reminder_edit_button_handler(
     )
 
 
-@router.callback_query(EditReminderStates.choosing_field, F.data.startswith(FIELD_PREFIX))
+# Без фильтра состояния: setting_id уже зашит в callback_data,
+# состояние выставляется заново внутри хендлера.
+@router.callback_query(F.data.startswith(FIELD_PREFIX))
 async def reminder_field_handler(
     callback: CallbackQuery, db: AsyncSession, state: FSMContext
 ) -> None:
