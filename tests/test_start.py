@@ -42,11 +42,20 @@ async def make_session() -> AsyncIterator[AsyncSession]:
 def make_message(text: str = "/start") -> MagicMock:
     message = MagicMock()
     message.answer = AsyncMock()
+    message.delete = AsyncMock()
     message.text = text
+    message.chat.id = 123
+    message.bot.delete_message = AsyncMock()
     message.from_user.id = 123
     message.from_user.username = "owner"
     message.from_user.full_name = "Тест"
     return message
+
+
+def make_state(data: dict[str, object] | None = None) -> AsyncMock:
+    state = AsyncMock()
+    state.get_data = AsyncMock(return_value=data or {})
+    return state
 
 
 async def test_start_handler_greets_user_by_name() -> None:
@@ -75,6 +84,8 @@ async def test_start_handler_creates_user_and_asks_timezone() -> None:
 
 
 async def test_timezone_button_saves_zone_and_seeds_default_reminder() -> None:
+    from aiogram.types import Message as TgMessage
+
     async for session in make_session():
         await UserRepository(session).get_or_create(123)
         callback = MagicMock()
@@ -82,7 +93,9 @@ async def test_timezone_button_saves_zone_and_seeds_default_reminder() -> None:
         callback.data = "tz:Europe/Moscow"
         callback.from_user.id = 123
         callback.from_user.username = "owner"
-        callback.message.edit_text = AsyncMock()
+        callback.message = MagicMock(spec=TgMessage)
+        callback.message.delete = AsyncMock()
+        callback.message.answer = AsyncMock()
         state = AsyncMock()
 
         await timezone_button_handler(callback, session, state)
@@ -93,6 +106,7 @@ async def test_timezone_button_saves_zone_and_seeds_default_reminder() -> None:
         assert len(reminders) == 1
         assert reminders[0].notify_days_before == 7
         state.clear.assert_awaited_once()
+        callback.message.delete.assert_awaited_once()
 
 
 async def test_timezone_text_rejects_unknown_zone() -> None:
@@ -112,13 +126,15 @@ async def test_timezone_text_accepts_iana_name() -> None:
     async for session in make_session():
         await UserRepository(session).get_or_create(123)
         message = make_message("Asia/Almaty")
-        state = AsyncMock()
+        state = make_state({"tz_prompt_id": 42})
 
         await timezone_text_handler(message, session, state)
 
         user = await UserRepository(session).get_by_tg_id(123)
         assert user is not None and user.time_zone == "Asia/Almaty"
         state.clear.assert_awaited_once()
+        message.delete.assert_awaited_once()
+        message.bot.delete_message.assert_awaited_once_with(123, 42)
 
 
 def test_is_valid_timezone() -> None:

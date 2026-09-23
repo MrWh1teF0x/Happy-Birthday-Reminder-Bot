@@ -19,4 +19,4 @@ async def start_handler(message: Message, db: AsyncSession, state: FSMContext) -
         await UserRepository(db).get_or_create(user.id, username=user.username)
     await state.set_state(TimezoneStates.waiting_for_timezone)
     await message.answer(f"Привет, {name}! Я напомню о днях рождения твоих близких. 🎂")
-    await request_timezone(message)
+    await request_timezone(message, state)

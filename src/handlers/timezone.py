@@ -1,8 +1,10 @@
 """Выбор часового пояса: кнопки + свободный ввод, используется /start и edit_utc."""
 
+from contextlib import suppress
 from zoneinfo import ZoneInfo
 
-from aiogram import F, Router
+from aiogram import Bot, F, Router
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
@@ -35,14 +37,30 @@ async def save_timezone_and_seed_reminder(
         await settings.create(tg_id)
 
 
-async def request_timezone(message: Message, current: str | None = None) -> None:
+async def request_timezone(message: Message, state: FSMContext, current: str | None = None) -> None:
     text = (
         "🕒 Выбери свой часовой пояс от UTC (кнопки ниже) "
         "или пришли название из базы IANA — например, `Europe/Moscow`."
     )
     if current:
         text = f"Текущий часовой пояс: `{current}`.\n\n{text}"
-    await message.answer(text, reply_markup=build_timezone_keyboard(), parse_mode="Markdown")
+    sent = await message.answer(text, reply_markup=build_timezone_keyboard(), parse_mode="Markdown")
+    await state.update_data(tz_prompt_id=sent.message_id)
+
+
+def build_timezone_confirm_text(zone: str) -> str:
+    return (
+        f"Готово! Часовой пояс — `{zone}`. Буду присылать оповещения за 7 дней в 09:00. "
+        "Посмотреть и изменить оповещения: /reminders_list."
+    )
+
+
+async def delete_timezone_prompt(bot: Bot, chat_id: int, state: FSMContext) -> None:
+    data = await state.get_data()
+    prompt_id = data.get("tz_prompt_id")
+    if isinstance(prompt_id, int):
+        with suppress(TelegramBadRequest):
+            await bot.delete_message(chat_id, prompt_id)
 
 
 @router.message(Command("edit_utc"))
@@ -53,7 +71,7 @@ async def edit_utc_handler(message: Message, db: AsyncSession, state: FSMContext
         message.from_user.id, username=message.from_user.username
     )
     await state.set_state(TimezoneStates.waiting_for_timezone)
-    await request_timezone(message, current=user.time_zone)
+    await request_timezone(message, state, current=user.time_zone)
 
 
 # Без фильтра состояния: кнопка должна срабатывать, даже если бот
@@ -72,11 +90,9 @@ async def timezone_button_handler(
     )
     await state.clear()
     if isinstance(callback.message, Message):
-        await callback.message.edit_text(
-            f"Готово! Часовой пояс — `{zone}`. Буду присылать оповещения за 7 дней в 09:00. "
-            "Посмотреть и изменить оповещения: /reminders_list.",
-            parse_mode="Markdown",
-        )
+        with suppress(TelegramBadRequest):
+            await callback.message.delete()
+        await callback.message.answer(build_timezone_confirm_text(zone), parse_mode="Markdown")
 
 
 @router.message(TimezoneStates.waiting_for_timezone, F.text)
@@ -89,9 +105,9 @@ async def timezone_text_handler(message: Message, db: AsyncSession, state: FSMCo
         )
         return
     await save_timezone_and_seed_reminder(db, message.from_user.id, zone)
+    if message.bot is not None:
+        await delete_timezone_prompt(message.bot, message.chat.id, state)
     await state.clear()
-    await message.answer(
-        f"Готово! Часовой пояс — `{zone}`. Буду присылать оповещения за 7 дней в 09:00. "
-        "Посмотреть и изменить оповещения: /reminders_list.",
-        parse_mode="Markdown",
-    )
+    with suppress(TelegramBadRequest):
+        await message.delete()
+    await message.answer(build_timezone_confirm_text(zone), parse_mode="Markdown")
