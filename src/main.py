@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from src.config.config import Settings
 from src.database import build_engine
 from src.handlers import router
+from src.handlers.commands import setup_commands
 from src.middlewares import DbSessionMiddleware
 
 
@@ -29,6 +30,7 @@ async def main() -> None:
     dispatcher.update.middleware(DbSessionMiddleware(session_factory))
     dispatcher.include_router(router)
     try:
+        await setup_commands(bot)
         await dispatcher.start_polling(bot)
     finally:
         await engine.dispose()
