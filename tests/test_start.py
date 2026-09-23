@@ -1,6 +1,7 @@
 from unittest.mock import AsyncMock, MagicMock
 
 from src.handlers import router, start_handler
+from src.handlers.start import router as start_router
 
 
 async def test_start_handler_greets_user_by_name() -> None:
@@ -26,5 +27,9 @@ async def test_start_handler_without_user() -> None:
 
 
 def test_start_handler_is_registered_for_command_start() -> None:
-    callbacks = [handler.callback.__name__ for handler in router.message.handlers]
+    callbacks = [handler.callback.__name__ for handler in start_router.message.handlers]
     assert "start_handler" in callbacks
+
+
+def test_start_router_is_included_in_root_router() -> None:
+    assert start_router in router.sub_routers

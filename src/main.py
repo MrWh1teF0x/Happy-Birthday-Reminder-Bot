@@ -5,9 +5,12 @@ from pathlib import Path
 from aiogram import Bot, Dispatcher
 from alembic import command
 from alembic.config import Config
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from src.config.config import Settings
+from src.database import build_engine
 from src.handlers import router
+from src.middlewares import DbSessionMiddleware
 
 
 def run_migrations() -> None:
@@ -20,8 +23,14 @@ async def main() -> None:
     await asyncio.to_thread(run_migrations)
     bot = Bot(token=settings.bot_token)
     dispatcher = Dispatcher()
+    engine = build_engine(settings.database_url)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
+    dispatcher.update.middleware(DbSessionMiddleware(session_factory))
     dispatcher.include_router(router)
-    await dispatcher.start_polling(bot)
+    try:
+        await dispatcher.start_polling(bot)
+    finally:
+        await engine.dispose()
 
 
 def run() -> None:
