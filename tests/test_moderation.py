@@ -21,16 +21,16 @@ def make_message(text: str | None) -> MagicMock:
     return message
 
 
-async def test_non_text_message_is_deleted() -> None:
+async def test_non_text_message_is_deleted_quietly() -> None:
     message = make_message(None)
 
     await non_text_handler(message)
 
     message.delete.assert_awaited_once()
-    message.answer.assert_awaited_once()
+    message.answer.assert_not_awaited()
 
 
-async def test_non_text_delete_failure_still_warns() -> None:
+async def test_non_text_delete_failure_is_ignored() -> None:
     message = make_message(None)
     message.delete = AsyncMock(
         side_effect=TelegramBadRequest(method=DeleteMessage(chat_id=1, message_id=1), message="x")
@@ -38,15 +38,16 @@ async def test_non_text_delete_failure_still_warns() -> None:
 
     await non_text_handler(message)
 
-    message.answer.assert_awaited_once()
+    message.answer.assert_not_awaited()
 
 
-async def test_emoji_text_is_deleted() -> None:
+async def test_emoji_text_is_deleted_quietly() -> None:
     message = make_message("Привет 🎂")
 
     await emoji_text_handler(message)
 
     message.delete.assert_awaited_once()
+    message.answer.assert_not_awaited()
 
 
 async def test_unknown_command_lists_available_commands() -> None:
@@ -58,6 +59,15 @@ async def test_unknown_command_lists_available_commands() -> None:
     assert "не существует" in text
     assert "/add_birthday" in text
     assert "/reminders_list" in text
+
+
+async def test_plain_text_gets_unknown_command_reply() -> None:
+    message = make_message("просто текст")
+
+    await unknown_command_handler(message)
+
+    text = message.answer.await_args.args[0]
+    assert "не существует" in text
 
 
 def test_contains_emoji() -> None:
