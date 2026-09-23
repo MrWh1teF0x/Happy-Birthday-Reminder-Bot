@@ -12,6 +12,7 @@ from sqlalchemy.pool import StaticPool
 from src.database import UserRepository, UserSettingRepository
 from src.database.models import Base
 from src.handlers import router, start_handler
+from src.handlers.keyboards import TIMEZONE_CALLBACK_PREFIX, build_timezone_keyboard
 from src.handlers.start import router as start_router
 from src.handlers.states import TimezoneStates
 from src.handlers.timezone import (
@@ -143,6 +144,20 @@ async def test_edit_utc_shows_current_zone_and_sets_state() -> None:
         state.set_state.assert_awaited_once_with(TimezoneStates.waiting_for_timezone)
         prompt = message.answer.await_args.args[0]
         assert "Asia/Almaty" in prompt
+
+
+def test_timezone_keyboard_covers_all_russian_utc_offsets() -> None:
+    keyboard = build_timezone_keyboard()
+    assert len(keyboard.inline_keyboard) == 11
+    zones = [
+        (button.callback_data or "").removeprefix(TIMEZONE_CALLBACK_PREFIX)
+        for row in keyboard.inline_keyboard
+        for button in row
+    ]
+    assert all(is_valid_timezone(zone) for zone in zones)
+    labels = [button.text for row in keyboard.inline_keyboard for button in row]
+    assert any("Калининград" in label for label in labels)
+    assert any("Камчатка" in label for label in labels)
 
 
 def test_routers_are_included_in_root_router() -> None:

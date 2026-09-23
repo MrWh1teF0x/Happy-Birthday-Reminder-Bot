@@ -36,8 +36,8 @@ async def save_timezone_and_seed_reminder(db: AsyncSession, tg_id: int, zone: st
 
 async def request_timezone(message: Message, current: str | None = None) -> None:
     text = (
-        "Выбери свой часовой пояс (кнопки ниже) или пришли название из базы IANA — "
-        "например, `Europe/Moscow`."
+        "🕒 Выбери свой часовой пояс от UTC (кнопки ниже) "
+        "или пришли название из базы IANA — например, `Europe/Moscow`."
     )
     if current:
         text = f"Текущий часовой пояс: `{current}`.\n\n{text}"
