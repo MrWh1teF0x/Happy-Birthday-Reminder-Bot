@@ -113,7 +113,9 @@ async def test_add_birthday_full_flow_with_note() -> None:
 
 async def test_add_birthday_skip_note() -> None:
     async for session in make_session():
-        state = make_state({"fullname": "Анна", "day": 1, "month": 3, "year": None})
+        state = make_state(
+            {"fullname": "Анна", "day": 1, "month": 3, "year": None, "note_prompt_id": 7}
+        )
         callback = make_callback(ADD_SKIP_NOTE)
 
         await birthday_skip_note_handler(callback, session, state)
@@ -122,7 +124,8 @@ async def test_add_birthday_skip_note() -> None:
         persons = await PersonRepository(session).list_by_owner(123)
         assert len(persons) == 1
         assert persons[0].notes is None
-        text = callback.message.edit_text.await_args.args[0]
+        callback.message.delete.assert_awaited_once()
+        text = callback.message.answer.await_args.args[0]
         assert "1 марта" in text
         assert "нет" in text
 
@@ -179,10 +182,41 @@ async def test_birthday_date_invalid_deletes_messages() -> None:
         message.delete.assert_awaited_once()
         message.bot.delete_message.assert_awaited_once_with(123, 42)
         assert "Некорректный формат" in message.answer.await_args.args[0]
+        keyboard = message.answer.await_args.kwargs["reply_markup"]
+        assert keyboard.inline_keyboard[0][0].text == "❌ Отмена"
         assert await PersonRepository(session).list_by_owner(123) == []
         state.set_state.assert_not_awaited()
         updated_keys = [list(call.kwargs.keys()) for call in state.update_data.await_args_list]
         assert any("date_prompt_id" in keys for keys in updated_keys)
+
+
+async def test_each_step_cleans_previous_messages() -> None:
+    async for session in make_session():
+        state = make_state({"name_prompt_id": 11})
+        message = make_message("Иван")
+
+        await birthday_name_handler(message, state)
+
+        message.delete.assert_awaited_once()
+        message.bot.delete_message.assert_awaited_once_with(123, 11)
+
+        state = make_state({"fullname": "Иван", "date_prompt_id": 22})
+        message = make_message("12.09.1995")
+
+        await birthday_date_handler(message, state)
+
+        message.delete.assert_awaited_once()
+        message.bot.delete_message.assert_awaited_once_with(123, 22)
+
+        state = make_state(
+            {"fullname": "Иван", "day": 12, "month": 9, "year": 1995, "note_prompt_id": 33}
+        )
+        message = make_message("Книги")
+
+        await birthday_note_handler(message, session, state)
+
+        message.delete.assert_awaited_once()
+        message.bot.delete_message.assert_awaited_once_with(123, 33)
 
 
 async def test_birthday_name_stores_date_prompt_id() -> None:
@@ -250,6 +284,9 @@ def make_callback(data: str, user_id: int = 123) -> MagicMock:
     callback.from_user.id = user_id
     callback.message = MagicMock(spec=TgMessage)
     callback.message.edit_text = AsyncMock()
+    callback.message.delete = AsyncMock()
+    callback.message.answer = AsyncMock()
+    object.__setattr__(callback.message, "message_id", 5)
     return callback
 
 

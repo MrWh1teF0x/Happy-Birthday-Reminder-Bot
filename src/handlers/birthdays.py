@@ -64,6 +64,8 @@ DATE_ERROR_TEXT = (
 )
 
 DATE_PROMPT_KEY = "date_prompt_id"
+NAME_PROMPT_KEY = "name_prompt_id"
+NOTE_PROMPT_KEY = "note_prompt_id"
 
 
 async def delete_step_message(bot: Bot, chat_id: int, state: FSMContext, key: str) -> None:
@@ -72,6 +74,14 @@ async def delete_step_message(bot: Bot, chat_id: int, state: FSMContext, key: st
     if isinstance(prompt_id, int):
         with suppress(TelegramBadRequest):
             await bot.delete_message(chat_id, prompt_id)
+
+
+async def cleanup_step(message: Message, state: FSMContext, key: str) -> None:
+    """Удаляет текст пользователя и предыдущий промпт бота для чистого UI."""
+    with suppress(TelegramBadRequest):
+        await message.delete()
+    if message.bot is not None:
+        await delete_step_message(message.bot, message.chat.id, state, key)
 
 
 CANCELLED_TEXT = "❌ Добавление отменено."
@@ -158,12 +168,7 @@ def build_finish_text(draft: BirthdayDraft) -> str:
 
 
 async def finish_add_birthday(
-    db: AsyncSession,
-    state: FSMContext,
-    tg_id: int,
-    note: str | None,
-    edit_message: Message | None,
-    answer_to: Message,
+    db: AsyncSession, state: FSMContext, tg_id: int, note: str | None, answer_to: Message
 ) -> None:
     data = await state.get_data()
     try:
@@ -180,18 +185,11 @@ async def finish_add_birthday(
         return
     await DbBirthdaySaver(db).save_birthday(tg_id, draft)
     await state.clear()
-    if edit_message is not None:
-        await edit_message.edit_text(
-            build_finish_text(draft),
-            reply_markup=build_finish_keyboard(),
-            parse_mode="Markdown",
-        )
-    else:
-        await answer_to.answer(
-            build_finish_text(draft),
-            reply_markup=build_finish_keyboard(),
-            parse_mode="Markdown",
-        )
+    await answer_to.answer(
+        build_finish_text(draft),
+        reply_markup=build_finish_keyboard(),
+        parse_mode="Markdown",
+    )
 
 
 @router.message(Command("add_birthday"))
@@ -202,7 +200,10 @@ async def add_birthday_handler(message: Message, db: AsyncSession, state: FSMCon
         message.from_user.id, username=message.from_user.username
     )
     await state.set_state(AddBirthdaySG.waiting_for_name)
-    await message.answer(STEP1_TEXT, reply_markup=build_cancel_keyboard(), parse_mode="Markdown")
+    sent = await message.answer(
+        STEP1_TEXT, reply_markup=build_cancel_keyboard(), parse_mode="Markdown"
+    )
+    await state.update_data(name_prompt_id=sent.message_id)
 
 
 @router.message(AddBirthdaySG.waiting_for_name, F.text)
@@ -216,6 +217,7 @@ async def birthday_name_handler(message: Message, state: FSMContext) -> None:
         return
     await state.update_data(fullname=fullname)
     await state.set_state(AddBirthdaySG.waiting_for_date)
+    await cleanup_step(message, state, NAME_PROMPT_KEY)
     sent = await message.answer(
         step2_text(fullname), reply_markup=build_cancel_keyboard(), parse_mode="Markdown"
     )
@@ -226,26 +228,31 @@ async def birthday_name_handler(message: Message, state: FSMContext) -> None:
 async def birthday_date_handler(message: Message, state: FSMContext) -> None:
     parsed = parse_birthday_date(message.text or "")
     if parsed is None:
-        if message.bot is not None:
-            await delete_step_message(message.bot, message.chat.id, state, DATE_PROMPT_KEY)
-            with suppress(TelegramBadRequest):
-                await message.delete()
-        error = await message.answer(DATE_ERROR_TEXT, parse_mode="Markdown")
+        await cleanup_step(message, state, DATE_PROMPT_KEY)
+        error = await message.answer(
+            DATE_ERROR_TEXT,
+            reply_markup=build_cancel_keyboard(),
+            parse_mode="Markdown",
+        )
         await state.update_data(date_prompt_id=error.message_id)
         return
     day, month, year = parsed
     await state.update_data(day=day, month=month, year=year)
     await state.set_state(AddBirthdaySG.waiting_for_note)
-    await message.answer(STEP3_TEXT, reply_markup=build_note_keyboard(), parse_mode="Markdown")
+    await cleanup_step(message, state, DATE_PROMPT_KEY)
+    sent = await message.answer(
+        STEP3_TEXT, reply_markup=build_note_keyboard(), parse_mode="Markdown"
+    )
+    await state.update_data(note_prompt_id=sent.message_id)
 
 
 @router.message(AddBirthdaySG.waiting_for_note, F.text)
 async def birthday_note_handler(message: Message, db: AsyncSession, state: FSMContext) -> None:
     if message.from_user is None:
         return
-    await finish_add_birthday(
-        db, state, message.from_user.id, (message.text or "").strip(), None, message
-    )
+    note = (message.text or "").strip()
+    await cleanup_step(message, state, NOTE_PROMPT_KEY)
+    await finish_add_birthday(db, state, message.from_user.id, note, message)
 
 
 @router.callback_query(F.data == ADD_SKIP_NOTE)
@@ -262,7 +269,9 @@ async def birthday_skip_note_handler(
     target = callback.message if isinstance(callback.message, Message) else None
     if target is None:
         return
-    await finish_add_birthday(db, state, callback.from_user.id, None, target, target)
+    with suppress(TelegramBadRequest):
+        await target.delete()
+    await finish_add_birthday(db, state, callback.from_user.id, None, target)
 
 
 @router.callback_query(F.data == ADD_CANCEL)
@@ -281,6 +290,7 @@ async def birthday_again_handler(callback: CallbackQuery, state: FSMContext) -> 
         await callback.message.edit_text(
             STEP1_TEXT, reply_markup=build_cancel_keyboard(), parse_mode="Markdown"
         )
+        await state.update_data(name_prompt_id=callback.message.message_id)
 
 
 @router.callback_query(F.data == ADD_LIST)
