@@ -43,13 +43,24 @@ async def save_timezone_and_seed_reminder(
     return is_first_choice
 
 
+TZ_SETUP_TEXT = (
+    "👇 Давай настроим бота под тебя!\n"
+    "\n"
+    "🕒 Выбери свой часовой пояс от UTC (кнопки ниже) "
+    "или пришли название из базы IANA — например, `Europe/Moscow`."
+)
+
+TZ_CHANGE_TEXT = (
+    "🕒 Выбери новый часовой пояс от UTC (кнопки ниже) "
+    "или пришли название из базы IANA — например, `Europe/Moscow`."
+)
+
+
 async def request_timezone(message: Message, state: FSMContext, current: str | None = None) -> None:
-    text = (
-        "🕒 Выбери свой часовой пояс от UTC (кнопки ниже) "
-        "или пришли название из базы IANA — например, `Europe/Moscow`."
-    )
     if current:
-        text = f"Текущий часовой пояс: `{current}`.\n\n{text}"
+        text = f"Текущий часовой пояс: `{current}`.\n\n{TZ_CHANGE_TEXT}"
+    else:
+        text = TZ_SETUP_TEXT
     sent = await message.answer(text, reply_markup=build_timezone_keyboard(), parse_mode="Markdown")
     await state.update_data(tz_prompt_id=sent.message_id)
 

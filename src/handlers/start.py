@@ -16,6 +16,22 @@ ABOUT_TEXT = (
     "сохраняй даты через /add_birthday, а я пришлю оповещения заранее."
 )
 
+GREETING_TEXT = (
+    "🎉 Привет {name}! Я — твой личный главный по праздникам!\n"
+    "\n"
+    "Больше никаких забытых дней рождения, паники в последний момент и неловких оправданий. "
+    "Я буду заранее напоминать тебе о важных датах, чтобы ты всегда успевал придумать "
+    "отличный подарок и поздравить близких первым!\n"
+    "\n"
+    "✨ Что я умею:\n"
+    "\n"
+    "📅 Запоминать дни рождения всех твоих друзей, родных и коллег.\n"
+    "\n"
+    "🔔 Напоминать о празднике за неделю, за 3 дня или прямо с утра.\n"
+    "\n"
+    "🎁 Хранить твои заметки с идеями для подарков."
+)
+
 
 @router.message(CommandStart())
 async def start_handler(message: Message, db: AsyncSession, state: FSMContext) -> None:
@@ -28,5 +44,5 @@ async def start_handler(message: Message, db: AsyncSession, state: FSMContext) -
             await maybe_show_help(db, user.id, message.answer)
             return
     await state.set_state(TimezoneStates.waiting_for_timezone)
-    await message.answer(f"Привет, {name}! {ABOUT_TEXT}")
+    await message.answer(GREETING_TEXT.format(name=name))
     await request_timezone(message, state)
