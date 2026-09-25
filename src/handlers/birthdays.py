@@ -91,6 +91,16 @@ async def birthday_date_handler(message: Message, db: AsyncSession, state: FSMCo
     )
 
 
+EMPTY_LIST_TEXT = (
+    "✨ Здесь пока ничего нет, но это легко исправить!\n"
+    "\n"
+    "Добавь день рождения близкого человека, друга или коллеги, "
+    "чтобы не забыть поздравить и вовремя подготовить подарок 🎁\n"
+    "\n"
+    "👉 Нажми сюда: /add_birthday"
+)
+
+
 EDIT_PREFIX = "birthday:edit:"
 DELETE_PREFIX = "birthday:del:"
 DELETE_YES_PREFIX = "bdel_yes:"
@@ -160,7 +170,7 @@ async def get_owned_person(db: AsyncSession, tg_id: int, person_id: int) -> Pers
 async def render_birthdays(message: Message, db: AsyncSession, tg_id: int) -> None:
     persons = await PersonRepository(db).list_by_owner(tg_id)
     if not persons:
-        await message.answer("Пока пусто. Добавь первый день рождения: /add_birthday.")
+        await message.answer(EMPTY_LIST_TEXT)
         return
     lines = [f"{i}. {format_birthday(person)}" for i, person in enumerate(persons, 1)]
     await message.answer(
@@ -318,7 +328,7 @@ async def birthday_delete_yes_handler(callback: CallbackQuery, db: AsyncSession)
     await callback.answer("Удалено.")
     persons = await PersonRepository(db).list_by_owner(callback.from_user.id)
     if not persons:
-        await callback.message.edit_text("Готово, удалил. Список пуст — добавить: /add_birthday.")
+        await callback.message.edit_text(EMPTY_LIST_TEXT)
         return
     lines = [f"{i}. {format_birthday(item)}" for i, item in enumerate(persons, 1)]
     await callback.message.edit_text(
@@ -335,7 +345,7 @@ async def birthday_delete_no_handler(callback: CallbackQuery, db: AsyncSession) 
     if isinstance(callback.message, Message):
         persons = await PersonRepository(db).list_by_owner(callback.from_user.id)
         if not persons:
-            await callback.message.edit_text("Список пуст — добавить: /add_birthday.")
+            await callback.message.edit_text(EMPTY_LIST_TEXT)
             return
         lines = [f"{i}. {format_birthday(item)}" for i, item in enumerate(persons, 1)]
         await callback.message.edit_text(

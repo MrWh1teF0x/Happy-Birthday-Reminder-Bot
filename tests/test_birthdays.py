@@ -150,7 +150,9 @@ async def test_birthdays_list_empty() -> None:
 
         await birthdays_list_handler(message, session)
 
-        assert "/add_birthday" in message.answer.await_args.args[0]
+        text = message.answer.await_args.args[0]
+        assert "Здесь пока ничего нет" in text
+        assert "/add_birthday" in text
 
 
 async def test_birthdays_list_shows_entries_with_buttons() -> None:
