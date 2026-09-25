@@ -12,7 +12,7 @@ from src.config.config import Settings
 from src.database import build_engine
 from src.handlers import router
 from src.handlers.commands import setup_commands
-from src.middlewares import DbSessionMiddleware
+from src.middlewares import DbSessionMiddleware, OnboardingMiddleware
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +34,7 @@ async def main() -> None:
     engine = build_engine(settings.database_url)
     session_factory = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
     dispatcher.update.middleware(DbSessionMiddleware(session_factory))
+    dispatcher.update.middleware(OnboardingMiddleware())
     dispatcher.include_router(router)
     try:
         await setup_commands(bot)
