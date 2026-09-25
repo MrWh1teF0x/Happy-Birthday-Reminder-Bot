@@ -62,6 +62,7 @@ def make_message(text: str) -> MagicMock:
     message.text = text
     message.chat.id = 123
     message.bot.delete_message = AsyncMock()
+    message.bot.edit_message_text = AsyncMock()
     message.from_user.id = 123
     message.from_user.username = "owner"
     return message
@@ -172,7 +173,7 @@ async def test_birthday_date_without_year() -> None:
         state.set_state.assert_awaited_once_with(AddBirthdaySG.waiting_for_note)
 
 
-async def test_birthday_date_invalid_deletes_messages() -> None:
+async def test_birthday_date_invalid_warns_on_prompt() -> None:
     async for session in make_session():
         state = make_state({"fullname": "Иван", "date_prompt_id": 42})
         message = make_message("31.02")
@@ -180,14 +181,16 @@ async def test_birthday_date_invalid_deletes_messages() -> None:
         await birthday_date_handler(message, state)
 
         message.delete.assert_awaited_once()
-        message.bot.delete_message.assert_awaited_once_with(123, 42)
-        assert "Некорректный формат" in message.answer.await_args.args[0]
-        keyboard = message.answer.await_args.kwargs["reply_markup"]
-        assert keyboard.inline_keyboard[0][0].text == "❌ Отмена"
+        message.bot.delete_message.assert_not_awaited()
+        message.answer.assert_not_awaited()
+        edited = message.bot.edit_message_text.await_args
+        assert edited.kwargs["chat_id"] == 123
+        assert edited.kwargs["message_id"] == 42
+        assert edited.args[0].startswith("⚠️")
+        assert "Шаг 2 из 3" in edited.args[0]
+        assert "Иван" in edited.args[0]
         assert await PersonRepository(session).list_by_owner(123) == []
         state.set_state.assert_not_awaited()
-        updated_keys = [list(call.kwargs.keys()) for call in state.update_data.await_args_list]
-        assert any("date_prompt_id" in keys for keys in updated_keys)
 
 
 async def test_each_step_cleans_previous_messages() -> None:

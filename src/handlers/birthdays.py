@@ -4,7 +4,7 @@ import re
 from contextlib import suppress
 from datetime import datetime
 
-from aiogram import Bot, F, Router
+from aiogram import F, Router
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
@@ -19,6 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.database import PersonRepository, UserRepository
 from src.database.models import Person
 from src.handlers.birthday_saver import BirthdayDraft, DbBirthdaySaver
+from src.handlers.prompt import cleanup_step, warn_invalid_input
 from src.handlers.states import AddBirthdaySG, EditBirthdayStates
 
 router = Router(name="birthdays")
@@ -59,29 +60,9 @@ STEP3_TEXT = (
     "Если заметка не нужна, нажмите кнопку ниже:"
 )
 
-DATE_ERROR_TEXT = (
-    "⚠️ Некорректный формат даты. Попробуйте еще раз (например: `12.09` или `12.09.1995`)."
-)
-
 DATE_PROMPT_KEY = "date_prompt_id"
 NAME_PROMPT_KEY = "name_prompt_id"
 NOTE_PROMPT_KEY = "note_prompt_id"
-
-
-async def delete_step_message(bot: Bot, chat_id: int, state: FSMContext, key: str) -> None:
-    data = await state.get_data()
-    prompt_id = data.get(key)
-    if isinstance(prompt_id, int):
-        with suppress(TelegramBadRequest):
-            await bot.delete_message(chat_id, prompt_id)
-
-
-async def cleanup_step(message: Message, state: FSMContext, key: str) -> None:
-    """Удаляет текст пользователя и предыдущий промпт бота для чистого UI."""
-    with suppress(TelegramBadRequest):
-        await message.delete()
-    if message.bot is not None:
-        await delete_step_message(message.bot, message.chat.id, state, key)
 
 
 CANCELLED_TEXT = "❌ Добавление отменено."
@@ -228,13 +209,9 @@ async def birthday_name_handler(message: Message, state: FSMContext) -> None:
 async def birthday_date_handler(message: Message, state: FSMContext) -> None:
     parsed = parse_birthday_date(message.text or "")
     if parsed is None:
-        await cleanup_step(message, state, DATE_PROMPT_KEY)
-        error = await message.answer(
-            DATE_ERROR_TEXT,
-            reply_markup=build_cancel_keyboard(),
-            parse_mode="Markdown",
-        )
-        await state.update_data(date_prompt_id=error.message_id)
+        data = await state.get_data()
+        fullname = str(data.get("fullname", "именинника"))
+        await warn_invalid_input(message, state, DATE_PROMPT_KEY, step2_text(fullname))
         return
     day, month, year = parsed
     await state.update_data(day=day, month=month, year=year)

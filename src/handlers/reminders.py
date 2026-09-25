@@ -4,7 +4,7 @@ import re
 from contextlib import suppress
 from datetime import time as time_type
 
-from aiogram import Bot, F, Router
+from aiogram import F, Router
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
@@ -18,6 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.database import UserRepository, UserSettingRepository
 from src.database.models import UserSetting
+from src.handlers.prompt import cleanup_step, warn_invalid_input
 from src.handlers.reminder_saver import DbReminderSaver
 from src.handlers.states import AddReminderSG, EditReminderStates
 
@@ -66,31 +67,10 @@ STEP2_TEXT = (
     "Выберите время или напишите его текстом в формате ЧЧ:ММ (например: `09:30`):"
 )
 
-DAYS_ERROR_TEXT = "⚠️ Введите корректное число дней (от 0 до 365)"
-
-TIME_ERROR_TEXT = "⚠️ Некорректный формат времени. Используйте формат ЧЧ:ММ (например: `10:00`)."
-
 ADD_CANCELLED_TEXT = "❌ Добавление напоминания отменено."
 
 DAYS_PROMPT_KEY = "days_prompt_id"
 TIME_PROMPT_KEY = "time_prompt_id"
-
-
-async def delete_step_message(bot: Bot, chat_id: int, state: FSMContext, key: str) -> None:
-    data = await state.get_data()
-    prompt_id = data.get(key)
-    if isinstance(prompt_id, int):
-        with suppress(TelegramBadRequest):
-            await bot.delete_message(chat_id, prompt_id)
-
-
-async def cleanup_step(message: Message, state: FSMContext, key: str) -> None:
-    """Удаляет текст пользователя и предыдущий промпт бота для чистого UI."""
-    with suppress(TelegramBadRequest):
-        await message.delete()
-    if message.bot is not None:
-        await delete_step_message(message.bot, message.chat.id, state, key)
-
 
 FIELD_LABELS: dict[str, str] = {
     FIELD_DAYS: "За сколько дней",
@@ -335,9 +315,7 @@ async def reminder_days_button_handler(callback: CallbackQuery, state: FSMContex
 async def reminder_days_handler(message: Message, state: FSMContext) -> None:
     days = parse_days(message.text or "")
     if days is None:
-        await cleanup_step(message, state, DAYS_PROMPT_KEY)
-        error = await message.answer(DAYS_ERROR_TEXT)
-        await state.update_data(days_prompt_id=error.message_id)
+        await warn_invalid_input(message, state, DAYS_PROMPT_KEY, STEP1_TEXT)
         return
     await state.update_data(days=days)
     await state.set_state(AddReminderSG.waiting_for_time)
@@ -387,9 +365,7 @@ async def reminder_time_handler(message: Message, db: AsyncSession, state: FSMCo
         return
     moment = parse_time(message.text or "")
     if moment is None:
-        await cleanup_step(message, state, TIME_PROMPT_KEY)
-        error = await message.answer(TIME_ERROR_TEXT, parse_mode="Markdown")
-        await state.update_data(time_prompt_id=error.message_id)
+        await warn_invalid_input(message, state, TIME_PROMPT_KEY, STEP2_TEXT)
         return
     await cleanup_step(message, state, TIME_PROMPT_KEY)
     await finish_add_reminder(db, state, message.from_user.id, moment, message)

@@ -63,6 +63,7 @@ def make_message(text: str) -> MagicMock:
     message.text = text
     message.chat.id = 123
     message.bot.delete_message = AsyncMock()
+    message.bot.edit_message_text = AsyncMock()
     message.from_user.id = 123
     message.from_user.username = "owner"
     return message
@@ -202,19 +203,22 @@ async def test_saver_service_dedupes() -> None:
         assert len(await UserSettingRepository(session).list_by_user(123)) == 1
 
 
-async def test_reminder_days_invalid_deletes_messages() -> None:
+async def test_reminder_days_invalid_warns_on_prompt() -> None:
     state = make_state({"days_prompt_id": 42})
     message = make_message("много")
 
     await reminder_days_handler(message, state)
 
     message.delete.assert_awaited_once()
-    message.bot.delete_message.assert_awaited_once_with(123, 42)
-    assert "корректное число" in message.answer.await_args.args[0]
+    message.answer.assert_not_awaited()
+    edited = message.bot.edit_message_text.await_args
+    assert edited.kwargs["message_id"] == 42
+    assert edited.args[0].startswith("⚠️")
+    assert "Шаг 1 из 2" in edited.args[0]
     state.set_state.assert_not_awaited()
 
 
-async def test_reminder_time_invalid_deletes_messages() -> None:
+async def test_reminder_time_invalid_warns_on_prompt() -> None:
     async for session in make_session():
         state = make_state({"days": 3, "time_prompt_id": 43})
         message = make_message("25:00")
@@ -222,8 +226,11 @@ async def test_reminder_time_invalid_deletes_messages() -> None:
         await reminder_time_handler(message, session, state)
 
         message.delete.assert_awaited_once()
-        message.bot.delete_message.assert_awaited_once_with(123, 43)
-        assert "Некорректный формат" in message.answer.await_args.args[0]
+        message.answer.assert_not_awaited()
+        edited = message.bot.edit_message_text.await_args
+        assert edited.kwargs["message_id"] == 43
+        assert edited.args[0].startswith("⚠️")
+        assert "Шаг 2 из 2" in edited.args[0]
         assert await UserSettingRepository(session).list_by_user(123) == []
         state.clear.assert_not_awaited()
 
