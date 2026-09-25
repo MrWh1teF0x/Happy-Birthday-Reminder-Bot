@@ -1,9 +1,11 @@
 """Оповещения: список, добавление и изменение (за сколько дней и во сколько)."""
 
 import re
+from contextlib import suppress
 from datetime import time as time_type
 
-from aiogram import F, Router
+from aiogram import Bot, F, Router
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.types import (
@@ -69,6 +71,26 @@ DAYS_ERROR_TEXT = "⚠️ Введите корректное число дне�
 TIME_ERROR_TEXT = "⚠️ Некорректный формат времени. Используйте формат ЧЧ:ММ (например: `10:00`)."
 
 ADD_CANCELLED_TEXT = "❌ Добавление напоминания отменено."
+
+DAYS_PROMPT_KEY = "days_prompt_id"
+TIME_PROMPT_KEY = "time_prompt_id"
+
+
+async def delete_step_message(bot: Bot, chat_id: int, state: FSMContext, key: str) -> None:
+    data = await state.get_data()
+    prompt_id = data.get(key)
+    if isinstance(prompt_id, int):
+        with suppress(TelegramBadRequest):
+            await bot.delete_message(chat_id, prompt_id)
+
+
+async def cleanup_step(message: Message, state: FSMContext, key: str) -> None:
+    """Удаляет текст пользователя и предыдущий промпт бота для чистого UI."""
+    with suppress(TelegramBadRequest):
+        await message.delete()
+    if message.bot is not None:
+        await delete_step_message(message.bot, message.chat.id, state, key)
+
 
 FIELD_LABELS: dict[str, str] = {
     FIELD_DAYS: "За сколько дней",
@@ -259,7 +281,10 @@ async def start_add_flow(message: Message, db: AsyncSession, state: FSMContext) 
         message.from_user.id, username=message.from_user.username
     )
     await state.set_state(AddReminderSG.waiting_for_days)
-    await message.answer(STEP1_TEXT, reply_markup=build_days_keyboard(), parse_mode="Markdown")
+    sent = await message.answer(
+        STEP1_TEXT, reply_markup=build_days_keyboard(), parse_mode="Markdown"
+    )
+    await state.update_data(days_prompt_id=sent.message_id)
 
 
 @router.message(Command("add_reminder"))
@@ -282,21 +307,7 @@ async def reminder_add_button_handler(
     await callback.message.edit_text(
         STEP1_TEXT, reply_markup=build_days_keyboard(), parse_mode="Markdown"
     )
-
-
-async def proceed_to_time(
-    state: FSMContext, days: int, edit_message: Message | None, answer_to: Message
-) -> None:
-    await state.update_data(days=days)
-    await state.set_state(AddReminderSG.waiting_for_time)
-    if edit_message is not None:
-        await edit_message.edit_text(
-            STEP2_TEXT, reply_markup=build_time_keyboard(), parse_mode="Markdown"
-        )
-    else:
-        await answer_to.answer(
-            STEP2_TEXT, reply_markup=build_time_keyboard(), parse_mode="Markdown"
-        )
+    await state.update_data(days_prompt_id=callback.message.message_id)
 
 
 @router.callback_query(F.data.startswith(ADD_DAYS_PREFIX))
@@ -312,25 +323,33 @@ async def reminder_days_button_handler(callback: CallbackQuery, state: FSMContex
         await callback.answer("Некорректное число.", show_alert=True)
         return
     await callback.answer()
-    await proceed_to_time(state, days, callback.message, callback.message)
+    await state.update_data(days=days)
+    await state.set_state(AddReminderSG.waiting_for_time)
+    await callback.message.edit_text(
+        STEP2_TEXT, reply_markup=build_time_keyboard(), parse_mode="Markdown"
+    )
+    await state.update_data(time_prompt_id=callback.message.message_id)
 
 
 @router.message(AddReminderSG.waiting_for_days, F.text)
 async def reminder_days_handler(message: Message, state: FSMContext) -> None:
     days = parse_days(message.text or "")
     if days is None:
-        await message.answer(DAYS_ERROR_TEXT)
+        await cleanup_step(message, state, DAYS_PROMPT_KEY)
+        error = await message.answer(DAYS_ERROR_TEXT)
+        await state.update_data(days_prompt_id=error.message_id)
         return
-    await proceed_to_time(state, days, None, message)
+    await state.update_data(days=days)
+    await state.set_state(AddReminderSG.waiting_for_time)
+    await cleanup_step(message, state, DAYS_PROMPT_KEY)
+    sent = await message.answer(
+        STEP2_TEXT, reply_markup=build_time_keyboard(), parse_mode="Markdown"
+    )
+    await state.update_data(time_prompt_id=sent.message_id)
 
 
 async def finish_add_reminder(
-    db: AsyncSession,
-    state: FSMContext,
-    tg_id: int,
-    moment: time_type,
-    edit_message: Message | None,
-    answer_to: Message,
+    db: AsyncSession, state: FSMContext, tg_id: int, moment: time_type, answer_to: Message
 ) -> None:
     data = await state.get_data()
     try:
@@ -343,12 +362,7 @@ async def finish_add_reminder(
     settings = await UserSettingRepository(db).list_by_user(tg_id)
     await state.clear()
     text = build_finish_text(setting) + "\n\n" + render_reminders_text(settings)
-    if edit_message is not None:
-        await edit_message.edit_text(
-            text, reply_markup=build_finish_keyboard(), parse_mode="Markdown"
-        )
-    else:
-        await answer_to.answer(text, reply_markup=build_finish_keyboard(), parse_mode="Markdown")
+    await answer_to.answer(text, reply_markup=build_finish_keyboard(), parse_mode="Markdown")
 
 
 @router.callback_query(F.data.startswith(ADD_TIME_PREFIX))
@@ -362,9 +376,9 @@ async def reminder_time_button_handler(
         await callback.answer("Некорректное время.", show_alert=True)
         return
     await callback.answer()
-    await finish_add_reminder(
-        db, state, callback.from_user.id, moment, callback.message, callback.message
-    )
+    with suppress(TelegramBadRequest):
+        await callback.message.delete()
+    await finish_add_reminder(db, state, callback.from_user.id, moment, callback.message)
 
 
 @router.message(AddReminderSG.waiting_for_time, F.text)
@@ -373,9 +387,12 @@ async def reminder_time_handler(message: Message, db: AsyncSession, state: FSMCo
         return
     moment = parse_time(message.text or "")
     if moment is None:
-        await message.answer(TIME_ERROR_TEXT, parse_mode="Markdown")
+        await cleanup_step(message, state, TIME_PROMPT_KEY)
+        error = await message.answer(TIME_ERROR_TEXT, parse_mode="Markdown")
+        await state.update_data(time_prompt_id=error.message_id)
         return
-    await finish_add_reminder(db, state, message.from_user.id, moment, None, message)
+    await cleanup_step(message, state, TIME_PROMPT_KEY)
+    await finish_add_reminder(db, state, message.from_user.id, moment, message)
 
 
 @router.callback_query(F.data == ADD_BACK)
@@ -386,6 +403,7 @@ async def reminder_back_handler(callback: CallbackQuery, state: FSMContext) -> N
         await callback.message.edit_text(
             STEP1_TEXT, reply_markup=build_days_keyboard(), parse_mode="Markdown"
         )
+        await state.update_data(days_prompt_id=callback.message.message_id)
 
 
 @router.callback_query(F.data == ADD_CANCEL)

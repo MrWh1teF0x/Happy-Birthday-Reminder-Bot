@@ -59,7 +59,10 @@ async def make_session() -> AsyncIterator[AsyncSession]:
 def make_message(text: str) -> MagicMock:
     message = MagicMock()
     message.answer = AsyncMock()
+    message.delete = AsyncMock()
     message.text = text
+    message.chat.id = 123
+    message.bot.delete_message = AsyncMock()
     message.from_user.id = 123
     message.from_user.username = "owner"
     return message
@@ -79,6 +82,9 @@ def make_callback(data: str, user_id: int = 123) -> MagicMock:
     callback.from_user.username = "owner"
     callback.message = MagicMock(spec=TgMessage)
     callback.message.edit_text = AsyncMock()
+    callback.message.delete = AsyncMock()
+    callback.message.answer = AsyncMock()
+    object.__setattr__(callback.message, "message_id", 5)
     return callback
 
 
@@ -126,11 +132,11 @@ async def test_add_reminder_buttons_flow() -> None:
         settings = await UserSettingRepository(session).list_by_user(123)
         assert len(settings) == 1
         assert settings[0].notification_time.strftime("%H:%M") == "18:00"
-        text = callback.message.edit_text.await_args.args[0]
+        callback.message.delete.assert_awaited_once()
+        text = callback.message.answer.await_args.args[0]
         assert "сохранено" in text
-        assert "Добавить еще" in str(
-            callback.message.edit_text.await_args.kwargs["reply_markup"].inline_keyboard
-        )
+        keyboard = callback.message.answer.await_args.kwargs["reply_markup"]
+        assert len(keyboard.inline_keyboard) == 1
 
 
 async def test_add_reminder_dedupe_updates_time() -> None:
@@ -196,22 +202,49 @@ async def test_saver_service_dedupes() -> None:
         assert len(await UserSettingRepository(session).list_by_user(123)) == 1
 
 
-async def test_reminder_days_invalid_stays_in_state() -> None:
-    state = AsyncMock()
+async def test_reminder_days_invalid_deletes_messages() -> None:
+    state = make_state({"days_prompt_id": 42})
+    message = make_message("много")
 
-    await reminder_days_handler(make_message("много"), state)
+    await reminder_days_handler(message, state)
 
+    message.delete.assert_awaited_once()
+    message.bot.delete_message.assert_awaited_once_with(123, 42)
+    assert "корректное число" in message.answer.await_args.args[0]
     state.set_state.assert_not_awaited()
 
 
-async def test_reminder_time_invalid_stays_in_state() -> None:
+async def test_reminder_time_invalid_deletes_messages() -> None:
     async for session in make_session():
-        state = make_state({"days": 3})
+        state = make_state({"days": 3, "time_prompt_id": 43})
+        message = make_message("25:00")
 
-        await reminder_time_handler(make_message("25:00"), session, state)
+        await reminder_time_handler(message, session, state)
 
+        message.delete.assert_awaited_once()
+        message.bot.delete_message.assert_awaited_once_with(123, 43)
+        assert "Некорректный формат" in message.answer.await_args.args[0]
         assert await UserSettingRepository(session).list_by_user(123) == []
         state.clear.assert_not_awaited()
+
+
+async def test_each_step_cleans_previous_messages() -> None:
+    async for session in make_session():
+        state = make_state({"days_prompt_id": 11})
+        message = make_message("3")
+
+        await reminder_days_handler(message, state)
+
+        message.delete.assert_awaited_once()
+        message.bot.delete_message.assert_awaited_once_with(123, 11)
+
+        state = make_state({"days": 3, "time_prompt_id": 22})
+        message = make_message("08:30")
+
+        await reminder_time_handler(message, session, state)
+
+        message.delete.assert_awaited_once()
+        message.bot.delete_message.assert_awaited_once_with(123, 22)
 
 
 async def test_reminders_list_shows_entries() -> None:
