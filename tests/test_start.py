@@ -173,8 +173,10 @@ def test_timezone_keyboard_covers_all_russian_utc_offsets() -> None:
     ]
     assert all(is_valid_timezone(zone) for zone in zones)
     labels = [button.text for row in keyboard.inline_keyboard for button in row]
+    assert labels[0].startswith("MSK-1 (UTC+2)")
+    assert labels[-1].startswith("MSK+9 (UTC+12)")
     assert any("Калининград" in label for label in labels)
-    assert any("Камчатка" in label for label in labels)
+    assert any("Петропавловск-Камчатский" in label for label in labels)
 
 
 def test_routers_are_included_in_root_router() -> None:
