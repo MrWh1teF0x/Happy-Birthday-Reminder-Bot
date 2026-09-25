@@ -68,7 +68,7 @@ async def test_start_handler_greets_user_by_name() -> None:
         texts = [call.args[0] for call in message.answer.await_args_list]
         assert any("Тест" in text for text in texts)
         assert any("главный по праздникам" in text for text in texts)
-        assert any("- 📅" in text and "- 🔔" in text and "- 🎁" in text for text in texts)
+        assert any("• 📅" in text and "• 🔔" in text and "• 🎁" in text for text in texts)
         assert any("Давай настроим бота под тебя" in text for text in texts)
         assert any("/help" in text for text in texts)
 
