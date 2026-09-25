@@ -38,6 +38,7 @@ async def test_user_defaults(session: AsyncSession) -> None:
     assert user.tg_id == 123
     assert user.time_zone == "UTC"
     assert user.tz_confirmed is False
+    assert user.help_shown is False
     assert user.created_at is not None
 
 

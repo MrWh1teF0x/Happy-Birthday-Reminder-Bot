@@ -148,8 +148,10 @@ async def test_second_choice_shows_changed_without_help() -> None:
     from aiogram.types import Message as TgMessage
 
     async for session in make_session():
-        await UserRepository(session).get_or_create(123)
+        user = await UserRepository(session).get_or_create(123)
         await UserRepository(session).set_time_zone(123, "UTC")
+        user.help_shown = True
+        await session.flush()
         callback = MagicMock()
         callback.answer = AsyncMock()
         callback.data = "tz:Europe/Moscow"
@@ -180,6 +182,53 @@ async def test_timezone_text_accepts_iana_name() -> None:
         state.clear.assert_awaited_once()
         message.delete.assert_awaited_once()
         message.bot.delete_message.assert_awaited_once_with(123, 42)
+
+
+async def test_repeated_start_shows_about_only() -> None:
+    async for session in make_session():
+        user = await UserRepository(session).get_or_create(123)
+        await UserRepository(session).set_time_zone(123, "UTC")
+        user.help_shown = True
+        await session.flush()
+        message = make_message()
+        state = AsyncMock()
+
+        await start_handler(message, session, state)
+
+        state.set_state.assert_not_awaited()
+        assert message.answer.await_count == 1
+        text = message.answer.await_args.args[0]
+        assert "днях рождения" in text
+
+
+async def test_repeated_start_shows_help_once_for_grandfathered() -> None:
+    async for session in make_session():
+        await UserRepository(session).get_or_create(123)
+        await UserRepository(session).set_time_zone(123, "UTC")
+
+        message = make_message()
+        await start_handler(message, session, AsyncMock())
+        assert message.answer.await_count == 2
+        assert "/add_birthday" in message.answer.await_args_list[1].args[0]
+
+        message = make_message()
+        await start_handler(message, session, AsyncMock())
+        assert message.answer.await_count == 1
+
+
+async def test_maybe_show_help_only_once() -> None:
+    from src.handlers.help import maybe_show_help
+
+    async for session in make_session():
+        await UserRepository(session).get_or_create(123)
+        send = AsyncMock()
+
+        await maybe_show_help(session, 123, send)
+        await maybe_show_help(session, 123, send)
+
+        send.assert_awaited_once()
+        user = await UserRepository(session).get_by_tg_id(123)
+        assert user is not None and user.help_shown is True
 
 
 def test_is_valid_timezone() -> None:

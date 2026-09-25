@@ -11,7 +11,7 @@ from aiogram.types import CallbackQuery, Message
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.database import UserRepository, UserSettingRepository
-from src.handlers.commands import render_help
+from src.handlers.help import maybe_show_help
 from src.handlers.keyboards import TIMEZONE_CALLBACK_PREFIX, build_timezone_keyboard
 from src.handlers.states import TimezoneStates
 
@@ -101,8 +101,7 @@ async def timezone_button_handler(
             build_timezone_confirm_text(zone, is_first_choice=is_first_choice),
             parse_mode="Markdown",
         )
-        if is_first_choice:
-            await callback.message.answer(render_help())
+        await maybe_show_help(db, callback.from_user.id, callback.message.answer)
 
 
 @router.message(TimezoneStates.waiting_for_timezone, F.text)
@@ -124,5 +123,4 @@ async def timezone_text_handler(message: Message, db: AsyncSession, state: FSMCo
         build_timezone_confirm_text(zone, is_first_choice=is_first_choice),
         parse_mode="Markdown",
     )
-    if is_first_choice:
-        await message.answer(render_help())
+    await maybe_show_help(db, message.from_user.id, message.answer)

@@ -20,6 +20,7 @@ class User(Base):
     username: Mapped[str | None] = mapped_column(String(64), nullable=True, default=None)
     time_zone: Mapped[str] = mapped_column(String(64), nullable=False, default="UTC")
     tz_confirmed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    help_shown: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, server_default=func.now()
     )
