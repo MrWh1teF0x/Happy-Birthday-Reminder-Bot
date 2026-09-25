@@ -21,6 +21,7 @@ from src.handlers.reminders import (
     ADD_NEW,
     add_reminder_handler,
     edit_reminder_hint_handler,
+    format_days_full,
     parse_days,
     parse_time,
     reminder_add_button_handler,
@@ -29,14 +30,16 @@ from src.handlers.reminders import (
     reminder_cancel_handler,
     reminder_days_button_handler,
     reminder_days_handler,
+    reminder_delete_button_handler,
+    reminder_delete_no_handler,
     reminder_delete_yes_handler,
-    reminder_edit_button_handler,
-    reminder_field_handler,
     reminder_time_button_handler,
+    reminder_time_edit_button_handler,
     reminder_time_handler,
-    reminder_toggle_handler,
     reminder_value_handler,
     reminders_list_handler,
+    reminders_page_handler,
+    utc_label,
 )
 from src.handlers.reminders import router as reminders_router
 from src.handlers.states import AddReminderSG
@@ -178,14 +181,14 @@ async def test_add_reminder_new_and_all_buttons() -> None:
         await UserRepository(session).get_or_create(123)
         await seed_setting(session)
 
-        state = AsyncMock()
+        state = make_state()
         callback = make_callback(ADD_NEW)
         await reminder_add_button_handler(callback, session, state)
         state.set_state.assert_awaited_once_with(AddReminderSG.waiting_for_days)
 
         callback = make_callback(ADD_ALL)
-        await reminder_all_handler(callback, session)
-        assert "За 7 дн." in callback.message.edit_text.await_args.args[0]
+        await reminder_all_handler(callback, session, make_state())
+        assert "Настройки напоминаний" in callback.message.edit_text.await_args.args[0]
 
 
 async def test_saver_service_dedupes() -> None:
@@ -258,24 +261,57 @@ async def test_each_step_cleans_previous_messages() -> None:
         message.bot.delete_message.assert_awaited_once_with(123, 22)
 
 
-async def test_reminders_list_shows_entries() -> None:
-    async for session in make_session():
-        await UserRepository(session).get_or_create(123)
-        await seed_setting(session)
-        message = make_message("/reminders_list")
-
-        await reminders_list_handler(message, session)
-
-        assert "За 7 дн. в 09:00" in message.answer.await_args.args[0]
-
-
 async def test_reminders_list_empty() -> None:
     async for session in make_session():
         message = make_message("/reminders_list")
 
-        await reminders_list_handler(message, session)
+        await reminders_list_handler(message, session, AsyncMock())
 
-        assert "/add_reminder" in message.answer.await_args.args[0]
+        assert "нет настроенных напоминаний" in message.answer.await_args.args[0]
+
+
+async def test_reminders_list_card_page() -> None:
+    async for session in make_session():
+        await UserRepository(session).get_or_create(123, time_zone="Europe/Moscow")
+        await seed_setting(session)
+        message = make_message("/reminders_list")
+
+        await reminders_list_handler(message, session, AsyncMock())
+
+        text = message.answer.await_args.args[0]
+        assert "Настройки напоминаний" in text
+        assert "Всего: 1, UTC+3" in text
+        assert "1️⃣" in text
+        assert "За 7 дней" in text
+        assert "09:00" in text
+        keyboard = message.answer.await_args.kwargs["reply_markup"]
+        assert len(keyboard.inline_keyboard) == 1
+        row = keyboard.inline_keyboard[0]
+        assert row[0].text == "⏰ Изменить время"
+        assert row[1].text == "🗑 Удалить"
+
+
+async def test_reminders_pagination() -> None:
+    async for session in make_session():
+        await UserRepository(session).get_or_create(123)
+        for days in (0, 1, 3, 5, 7, 14):
+            await UserSettingRepository(session).create(123, notify_days_before=days)
+        message = make_message("/reminders_list")
+        state = AsyncMock()
+
+        await reminders_list_handler(message, session, state)
+
+        keyboard = message.answer.await_args.kwargs["reply_markup"]
+        assert len(keyboard.inline_keyboard) == 6
+        nav = keyboard.inline_keyboard[5]
+        assert [button.text for button in nav] == ["1 / 2", "Вперед ➡️"]
+
+        callback = make_callback("rem_page:2")
+        await reminders_page_handler(callback, session, state)
+
+        rows = callback.message.edit_text.await_args.kwargs["reply_markup"].inline_keyboard
+        assert len(rows) == 2
+        assert [button.text for button in rows[-1]] == ["⬅️ Назад", "2 / 2"]
 
 
 async def test_edit_reminder_hint_points_to_list() -> None:
@@ -286,61 +322,113 @@ async def test_edit_reminder_hint_points_to_list() -> None:
     assert "/reminders_list" in message.answer.await_args.args[0]
 
 
-async def test_edit_flow_changes_days() -> None:
+async def test_time_edit_flow_changes_time() -> None:
     async for session in make_session():
         await UserRepository(session).get_or_create(123)
         setting_id = await seed_setting(session)
 
         state = make_state()
-        await reminder_edit_button_handler(
-            make_callback(f"reminder:edit:{setting_id}"), session, state
-        )
+        callback = make_callback(f"edit_rem:{setting_id}")
+        await reminder_time_edit_button_handler(callback, session, state)
         state.set_state.assert_awaited_once()
+        assert "09:00" in callback.message.edit_text.await_args.args[0]
 
-        state = make_state({"setting_id": setting_id})
-        await reminder_field_handler(make_callback(f"redit:{setting_id}:days"), session, state)
-
-        state = make_state({"setting_id": setting_id, "field": "days"})
-        message = make_message("1")
+        state = make_state({"setting_id": setting_id, "field": "time"})
+        message = make_message("10:00")
         await reminder_value_handler(message, session, state)
         state.clear.assert_awaited_once()
 
         setting = await UserSettingRepository(session).get(setting_id)
-        assert setting is not None and setting.notify_days_before == 1
+        assert setting is not None
+        assert setting.notification_time.strftime("%H:%M") == "10:00"
 
 
-async def test_toggle_flips_enabled() -> None:
+async def test_time_edit_rejects_bad_time() -> None:
     async for session in make_session():
         await UserRepository(session).get_or_create(123)
         setting_id = await seed_setting(session)
+        state = make_state({"setting_id": setting_id, "field": "time"})
 
-        await reminder_toggle_handler(make_callback(f"reminder:toggle:{setting_id}"), session)
+        await reminder_value_handler(make_message("утром"), session, state)
 
-        setting = await UserSettingRepository(session).get(setting_id)
-        assert setting is not None and setting.is_enabled is False
-
-
-async def test_delete_yes_removes_setting() -> None:
-    async for session in make_session():
-        await UserRepository(session).get_or_create(123)
-        setting_id = await seed_setting(session)
-
-        await reminder_delete_yes_handler(make_callback(f"rdel_yes:{setting_id}"), session)
-
-        assert await UserSettingRepository(session).get(setting_id) is None
+        state.clear.assert_not_awaited()
 
 
-async def test_edit_button_rejects_foreign_setting() -> None:
+async def test_time_edit_rejects_foreign_setting() -> None:
     async for session in make_session():
         await UserRepository(session).get_or_create(999)
         setting_id = await seed_setting(session, tg_id=999)
         state = make_state()
 
-        await reminder_edit_button_handler(
-            make_callback(f"reminder:edit:{setting_id}"), session, state
+        await reminder_time_edit_button_handler(
+            make_callback(f"edit_rem:{setting_id}"), session, state
         )
 
         state.set_state.assert_not_awaited()
+
+
+async def test_delete_confirm_and_remove() -> None:
+    async for session in make_session():
+        await UserRepository(session).get_or_create(123)
+        setting_id = await seed_setting(session)
+        state = make_state({"rem_page": 1})
+
+        callback = make_callback(f"del_rem:{setting_id}")
+        await reminder_delete_button_handler(callback, session)
+
+        text = callback.message.edit_text.await_args.args[0]
+        assert "Вы уверены" in text
+        keyboard = callback.message.edit_text.await_args.kwargs["reply_markup"]
+        assert keyboard.inline_keyboard[0][0].text == "✅ Да, удалить"
+
+        callback = make_callback(f"confirm_del_rem:{setting_id}")
+        await reminder_delete_yes_handler(callback, session, state)
+
+        assert await UserSettingRepository(session).get(setting_id) is None
+        assert "успешно удалена" in callback.answer.await_args.args[0].lower()
+        assert "нет настроенных напоминаний" in callback.message.edit_text.await_args.args[0]
+
+
+async def test_delete_cancel_returns_to_list() -> None:
+    async for session in make_session():
+        await UserRepository(session).get_or_create(123)
+        setting_id = await seed_setting(session)
+        state = make_state({"rem_page": 1})
+        callback = make_callback("cancel_del_rem")
+
+        await reminder_delete_no_handler(callback, session, state)
+
+        assert await UserSettingRepository(session).get(setting_id) is not None
+        assert "Настройки напоминаний" in callback.message.edit_text.await_args.args[0]
+
+
+async def test_delete_last_on_page_returns_to_previous() -> None:
+    async for session in make_session():
+        await UserRepository(session).get_or_create(123)
+        ids = []
+        for days in (0, 1, 3, 5, 7, 14):
+            setting = await UserSettingRepository(session).create(123, notify_days_before=days)
+            ids.append(setting.id)
+        state = make_state({"rem_page": 2})
+
+        callback = make_callback(f"confirm_del_rem:{ids[5]}")
+        await reminder_delete_yes_handler(callback, session, state)
+
+        rows = callback.message.edit_text.await_args.kwargs["reply_markup"].inline_keyboard
+        assert len(rows) == 5
+
+
+def test_format_days_full() -> None:
+    assert format_days_full(0) == "В день праздника"
+    assert format_days_full(1) == "За 1 день"
+    assert format_days_full(3) == "За 3 дня"
+    assert format_days_full(7) == "За 7 дней"
+
+
+def test_utc_label() -> None:
+    assert utc_label("Europe/Moscow") == "UTC+3"
+    assert utc_label("Asia/Kamchatka") == "UTC+12"
+    assert utc_label("Nope/Nowhere") == "UTC"
 
 
 def test_parse_days() -> None:

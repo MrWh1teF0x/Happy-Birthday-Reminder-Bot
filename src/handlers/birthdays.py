@@ -2,7 +2,8 @@
 
 import re
 from contextlib import suppress
-from datetime import datetime
+from datetime import date, datetime
+from zoneinfo import ZoneInfo
 
 from aiogram import F, Router
 from aiogram.exceptions import TelegramBadRequest
@@ -19,6 +20,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.database import PersonRepository, UserRepository
 from src.database.models import Person
 from src.handlers.birthday_saver import BirthdayDraft, DbBirthdaySaver
+from src.handlers.pagination import (
+    build_pagination_keyboard,
+    days_until,
+    page_slice,
+    paginate,
+    plural,
+    turning_age,
+)
 from src.handlers.prompt import cleanup_step, warn_invalid_input
 from src.handlers.states import AddBirthdaySG, EditBirthdayStates
 
@@ -100,12 +109,6 @@ def build_finish_keyboard() -> InlineKeyboardMarkup:
             [InlineKeyboardButton(text="➕ Добавить еще", callback_data=ADD_AGAIN)],
             [InlineKeyboardButton(text="📋 Мой список ДР", callback_data=ADD_LIST)],
         ]
-    )
-
-
-def build_add_keyboard() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[[InlineKeyboardButton(text="➕ Добавить", callback_data=ADD_AGAIN)]]
     )
 
 
@@ -277,40 +280,30 @@ async def birthday_again_handler(callback: CallbackQuery, state: FSMContext) -> 
 
 
 @router.callback_query(F.data == ADD_LIST)
-async def birthday_list_button_handler(callback: CallbackQuery, db: AsyncSession) -> None:
+async def birthday_list_button_handler(
+    callback: CallbackQuery, db: AsyncSession, state: FSMContext
+) -> None:
     await callback.answer()
     if not isinstance(callback.message, Message):
         return
-    persons = await PersonRepository(db).list_by_owner(callback.from_user.id)
-    if not persons:
-        await callback.message.edit_text(EMPTY_LIST_TEXT, reply_markup=build_add_keyboard())
-        return
-    lines = [f"{i}. {format_birthday(person)}" for i, person in enumerate(persons, 1)]
-    await callback.message.edit_text(
-        "Сохранённые дни рождения:\n\n" + "\n".join(lines),
-        reply_markup=build_birthdays_keyboard(persons),
-    )
+    await edit_birthdays_page(callback.message, db, callback.from_user.id, 1, state)
 
 
-EMPTY_LIST_TEXT = (
-    "✨ Здесь пока ничего нет, но это легко исправить!\n"
-    "\n"
-    "Добавь день рождения близкого человека, друга или коллеги, "
-    "чтобы не забыть поздравить и вовремя подготовить подарок 🎁\n"
-    "\n"
-    "👉 Нажми сюда: /add_birthday"
-)
+EMPTY_BDAY_TEXT = "🎈 Ваша база дней рождения пока пуста."
 
 
-EDIT_PREFIX = "birthday:edit:"
-DELETE_PREFIX = "birthday:del:"
-DELETE_YES_PREFIX = "bdel_yes:"
-DELETE_NO_PREFIX = "bdel_no:"
+BDAY_PAGE_PREFIX = "bday_page"
+EDIT_BDAY_PREFIX = "edit_bday:"
+DEL_BDAY_PREFIX = "del_bday:"
+CONFIRM_DEL_BDAY_PREFIX = "confirm_del_bday:"
+CANCEL_DEL_BDAY = "cancel_del_bday"
 FIELD_PREFIX = "bedit:"
 FIELD_FULLNAME = "fullname"
 FIELD_DATE = "date"
 FIELD_USERNAME = "username"
 FIELD_NOTES = "notes"
+BDAY_PAGE_KEY = "bday_page"
+SOON_DAYS_LIMIT = 30
 
 FIELD_LABELS: dict[str, str] = {
     FIELD_FULLNAME: "Имя",
@@ -327,16 +320,19 @@ def format_birthday(person: Person) -> str:
     return f"{person.fullname} — {date}"
 
 
-def build_birthdays_keyboard(persons: list[Person]) -> InlineKeyboardMarkup:
-    rows = [
+def build_birthdays_page_keyboard(
+    persons: list[Person], page: int, total_pages: int
+) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = [
         [
-            InlineKeyboardButton(
-                text=f"✏️ {person.fullname}", callback_data=f"{EDIT_PREFIX}{person.id}"
-            ),
-            InlineKeyboardButton(text="🗑", callback_data=f"{DELETE_PREFIX}{person.id}"),
+            InlineKeyboardButton(text="✏️ Изменить", callback_data=f"{EDIT_BDAY_PREFIX}{person.id}"),
+            InlineKeyboardButton(text="🗑 Удалить", callback_data=f"{DEL_BDAY_PREFIX}{person.id}"),
         ]
-        for person in persons
+        for person in persons[page_slice(page)]
     ]
+    nav = build_pagination_keyboard(BDAY_PAGE_PREFIX, page, total_pages)
+    if nav is not None:
+        rows.extend(nav.inline_keyboard)
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -353,11 +349,92 @@ def build_delete_confirm_keyboard(person_id: int) -> InlineKeyboardMarkup:
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text="Да, удалить", callback_data=f"{DELETE_YES_PREFIX}{person_id}"
+                    text="✅ Да, удалить",
+                    callback_data=f"{CONFIRM_DEL_BDAY_PREFIX}{person_id}",
                 ),
-                InlineKeyboardButton(text="Нет", callback_data=f"{DELETE_NO_PREFIX}{person_id}"),
+                InlineKeyboardButton(text="❌ Отмена", callback_data=CANCEL_DEL_BDAY),
             ]
         ]
+    )
+
+
+def user_today(tz_name: str | None) -> date:
+    try:
+        tz = ZoneInfo(tz_name or "UTC")
+    except Exception:
+        tz = ZoneInfo("UTC")
+    return datetime.now(tz).date()
+
+
+def build_birthday_card(person: Person, index: int, today: date) -> str:
+    emoji = "🎈" if index % 2 == 1 else "🍰"
+    date_text = f"{person.birth_day} {MONTHS_GENITIVE[person.birth_month - 1]}"
+    head = f"{emoji} **{index}. {person.fullname}** — **{date_text}**"
+    until = days_until(person.birth_day, person.birth_month, today)
+    if until <= SOON_DAYS_LIMIT:
+        head += f" *(через {until} {plural(until, 'день', 'дня', 'дней')})*"
+    details: list[str] = []
+    age = turning_age(person.birth_day, person.birth_month, person.birth_year, today)
+    if age is not None:
+        details.append(f"🎂 Исполнится: {age} {plural(age, 'год', 'года', 'лет')}")
+    if person.notes:
+        details.append(f"🎁 *«{person.notes}»*")
+    if details:
+        return head + "\n" + " | ".join(details)
+    return head
+
+
+def build_birthdays_page_text(persons: list[Person], page: int, today: date) -> str:
+    header = f"📋 **Список дней рождения** *(Всего: {len(persons)})*"
+    offset = (page - 1) * 5
+    cards = [
+        build_birthday_card(person, offset + i + 1, today)
+        for i, person in enumerate(persons[page_slice(page)])
+    ]
+    return header + "\n\n" + "\n\n".join(cards)
+
+
+async def get_bday_page(state: FSMContext) -> int:
+    data = await state.get_data()
+    try:
+        return max(1, int(data.get(BDAY_PAGE_KEY, 1)))
+    except (TypeError, ValueError):
+        return 1
+
+
+async def answer_birthdays_page(
+    message: Message, db: AsyncSession, tg_id: int, page: int, state: FSMContext
+) -> None:
+    user = await UserRepository(db).get_by_tg_id(tg_id)
+    persons = await PersonRepository(db).list_by_owner(tg_id)
+    if not persons:
+        await message.answer(EMPTY_BDAY_TEXT)
+        return
+    page, total_pages = paginate(len(persons), page)
+    await state.update_data(bday_page=page)
+    today = user_today(user.time_zone if user else None)
+    await message.answer(
+        build_birthdays_page_text(persons, page, today),
+        reply_markup=build_birthdays_page_keyboard(persons, page, total_pages),
+        parse_mode="Markdown",
+    )
+
+
+async def edit_birthdays_page(
+    message: Message, db: AsyncSession, tg_id: int, page: int, state: FSMContext
+) -> None:
+    user = await UserRepository(db).get_by_tg_id(tg_id)
+    persons = await PersonRepository(db).list_by_owner(tg_id)
+    if not persons:
+        await message.edit_text(EMPTY_BDAY_TEXT)
+        return
+    page, total_pages = paginate(len(persons), page)
+    await state.update_data(bday_page=page)
+    today = user_today(user.time_zone if user else None)
+    await message.edit_text(
+        build_birthdays_page_text(persons, page, today),
+        reply_markup=build_birthdays_page_keyboard(persons, page, total_pages),
+        parse_mode="Markdown",
     )
 
 
@@ -368,23 +445,26 @@ async def get_owned_person(db: AsyncSession, tg_id: int, person_id: int) -> Pers
     return person
 
 
-async def render_birthdays(message: Message, db: AsyncSession, tg_id: int) -> None:
-    persons = await PersonRepository(db).list_by_owner(tg_id)
-    if not persons:
-        await message.answer(EMPTY_LIST_TEXT, reply_markup=build_add_keyboard())
-        return
-    lines = [f"{i}. {format_birthday(person)}" for i, person in enumerate(persons, 1)]
-    await message.answer(
-        "Сохранённые дни рождения:\n\n" + "\n".join(lines),
-        reply_markup=build_birthdays_keyboard(persons),
-    )
-
-
 @router.message(Command("birthdays_list"))
-async def birthdays_list_handler(message: Message, db: AsyncSession) -> None:
+async def birthdays_list_handler(message: Message, db: AsyncSession, state: FSMContext) -> None:
     if message.from_user is None:
         return
-    await render_birthdays(message, db, message.from_user.id)
+    await answer_birthdays_page(message, db, message.from_user.id, 1, state)
+
+
+@router.callback_query(F.data.startswith(BDAY_PAGE_PREFIX + ":"))
+async def birthdays_page_handler(
+    callback: CallbackQuery, db: AsyncSession, state: FSMContext
+) -> None:
+    if callback.data is None or not isinstance(callback.message, Message):
+        return
+    try:
+        page = int(callback.data.split(":")[1])
+    except (ValueError, IndexError):
+        await callback.answer("Некорректная страница.", show_alert=True)
+        return
+    await callback.answer()
+    await edit_birthdays_page(callback.message, db, callback.from_user.id, page, state)
 
 
 @router.message(Command("edit_birthday"))
@@ -394,14 +474,14 @@ async def edit_birthday_hint_handler(message: Message) -> None:
     )
 
 
-@router.callback_query(F.data.startswith(EDIT_PREFIX))
+@router.callback_query(F.data.startswith(EDIT_BDAY_PREFIX))
 async def birthday_edit_button_handler(
     callback: CallbackQuery, db: AsyncSession, state: FSMContext
 ) -> None:
     if callback.from_user is None or callback.data is None:
         return
     try:
-        person_id = int(callback.data.removeprefix(EDIT_PREFIX))
+        person_id = int(callback.data.removeprefix(EDIT_BDAY_PREFIX))
     except ValueError:
         await callback.answer("Некорректная запись.", show_alert=True)
         return
@@ -492,12 +572,12 @@ async def birthday_value_handler(message: Message, db: AsyncSession, state: FSMC
     await message.answer(f"Готово! {format_birthday(updated)}")
 
 
-@router.callback_query(F.data.startswith(DELETE_PREFIX))
+@router.callback_query(F.data.startswith(DEL_BDAY_PREFIX))
 async def birthday_delete_button_handler(callback: CallbackQuery, db: AsyncSession) -> None:
     if callback.from_user is None or callback.data is None:
         return
     try:
-        person_id = int(callback.data.removeprefix(DELETE_PREFIX))
+        person_id = int(callback.data.removeprefix(DEL_BDAY_PREFIX))
     except ValueError:
         await callback.answer("Некорректная запись.", show_alert=True)
         return
@@ -506,18 +586,26 @@ async def birthday_delete_button_handler(callback: CallbackQuery, db: AsyncSessi
         await callback.answer("Запись не найдена.", show_alert=True)
         return
     await callback.answer()
+    date_text = format_birthday_long(person.birth_day, person.birth_month, person.birth_year)
     await callback.message.edit_text(
-        f"Удалить {format_birthday(person)}?",
+        "⚠️ **Вы уверены, что хотите удалить день рождения?**\n"
+        "\n"
+        f"👤 **{person.fullname}** ({date_text})\n"
+        "\n"
+        "*Это действие нельзя отменить.*",
         reply_markup=build_delete_confirm_keyboard(person_id),
+        parse_mode="Markdown",
     )
 
 
-@router.callback_query(F.data.startswith(DELETE_YES_PREFIX))
-async def birthday_delete_yes_handler(callback: CallbackQuery, db: AsyncSession) -> None:
+@router.callback_query(F.data.startswith(CONFIRM_DEL_BDAY_PREFIX))
+async def birthday_delete_yes_handler(
+    callback: CallbackQuery, db: AsyncSession, state: FSMContext
+) -> None:
     if callback.from_user is None or callback.data is None:
         return
     try:
-        person_id = int(callback.data.removeprefix(DELETE_YES_PREFIX))
+        person_id = int(callback.data.removeprefix(CONFIRM_DEL_BDAY_PREFIX))
     except ValueError:
         await callback.answer("Некорректная запись.", show_alert=True)
         return
@@ -526,30 +614,18 @@ async def birthday_delete_yes_handler(callback: CallbackQuery, db: AsyncSession)
         await callback.answer("Запись не найдена.", show_alert=True)
         return
     await PersonRepository(db).delete(person_id)
-    await callback.answer("Удалено.")
-    persons = await PersonRepository(db).list_by_owner(callback.from_user.id)
-    if not persons:
-        await callback.message.edit_text(EMPTY_LIST_TEXT)
-        return
-    lines = [f"{i}. {format_birthday(item)}" for i, item in enumerate(persons, 1)]
-    await callback.message.edit_text(
-        "Готово, удалил.\n\nСохранённые дни рождения:\n\n" + "\n".join(lines),
-        reply_markup=build_birthdays_keyboard(persons),
-    )
+    await callback.answer("Запись успешно удалена")
+    page = await get_bday_page(state)
+    await edit_birthdays_page(callback.message, db, callback.from_user.id, page, state)
 
 
-@router.callback_query(F.data.startswith(DELETE_NO_PREFIX))
-async def birthday_delete_no_handler(callback: CallbackQuery, db: AsyncSession) -> None:
+@router.callback_query(F.data == CANCEL_DEL_BDAY)
+async def birthday_delete_no_handler(
+    callback: CallbackQuery, db: AsyncSession, state: FSMContext
+) -> None:
     if callback.from_user is None or callback.data is None:
         return
     await callback.answer()
     if isinstance(callback.message, Message):
-        persons = await PersonRepository(db).list_by_owner(callback.from_user.id)
-        if not persons:
-            await callback.message.edit_text(EMPTY_LIST_TEXT)
-            return
-        lines = [f"{i}. {format_birthday(item)}" for i, item in enumerate(persons, 1)]
-        await callback.message.edit_text(
-            "Сохранённые дни рождения:\n\n" + "\n".join(lines),
-            reply_markup=build_birthdays_keyboard(persons),
-        )
+        page = await get_bday_page(state)
+        await edit_birthdays_page(callback.message, db, callback.from_user.id, page, state)

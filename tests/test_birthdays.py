@@ -1,4 +1,6 @@
 from collections.abc import AsyncIterator
+from datetime import datetime
+from datetime import timezone as tz_utc
 from unittest.mock import AsyncMock, MagicMock
 
 from sqlalchemy.ext.asyncio import (
@@ -22,6 +24,7 @@ from src.handlers.birthdays import (
     birthday_again_handler,
     birthday_cancel_handler,
     birthday_date_handler,
+    birthday_delete_button_handler,
     birthday_delete_no_handler,
     birthday_delete_yes_handler,
     birthday_edit_button_handler,
@@ -32,6 +35,7 @@ from src.handlers.birthdays import (
     birthday_skip_note_handler,
     birthday_value_handler,
     birthdays_list_handler,
+    birthdays_page_handler,
     edit_birthday_hint_handler,
     format_birthday,
     format_birthday_long,
@@ -158,7 +162,7 @@ async def test_add_birthday_list_button_shows_list() -> None:
         await PersonRepository(session).create(123, fullname="Иван", birth_day=12, birth_month=5)
         callback = make_callback(ADD_LIST)
 
-        await birthday_list_button_handler(callback, session)
+        await birthday_list_button_handler(callback, session, make_state())
 
         assert "Иван" in callback.message.edit_text.await_args.args[0]
 
@@ -306,24 +310,70 @@ async def test_birthdays_list_empty() -> None:
     async for session in make_session():
         message = make_message("/birthdays_list")
 
-        await birthdays_list_handler(message, session)
+        await birthdays_list_handler(message, session, AsyncMock())
 
         text = message.answer.await_args.args[0]
-        assert "Здесь пока ничего нет" in text
-        assert "/add_birthday" in text
+        assert "Ваша база дней рождения пока пуста" in text
 
 
-async def test_birthdays_list_shows_entries_with_buttons() -> None:
+async def test_birthdays_list_card_page() -> None:
     async for session in make_session():
         await seed_person(session)
         message = make_message("/birthdays_list")
 
-        await birthdays_list_handler(message, session)
+        await birthdays_list_handler(message, session, AsyncMock())
 
         text = message.answer.await_args.args[0]
-        assert "Иван — 12.05.2000" in text
+        assert "Список дней рождения" in text
+        assert "Всего: 1" in text
+        assert "1. Иван" in text
+        assert "12 мая" in text
+        assert "Исполнится" in text
         keyboard = message.answer.await_args.kwargs["reply_markup"]
         assert len(keyboard.inline_keyboard) == 1
+        row = keyboard.inline_keyboard[0]
+        assert row[0].text == "✏️ Изменить"
+        assert row[1].text == "🗑 Удалить"
+
+
+async def test_birthdays_pagination() -> None:
+    async for session in make_session():
+        for i in range(6):
+            await PersonRepository(session).create(
+                123, fullname=f"Друг{i}", birth_day=1, birth_month=1
+            )
+        message = make_message("/birthdays_list")
+        state = AsyncMock()
+
+        await birthdays_list_handler(message, session, state)
+
+        keyboard = message.answer.await_args.kwargs["reply_markup"]
+        assert len(keyboard.inline_keyboard) == 6  # 5 карточек + навигация
+        nav = keyboard.inline_keyboard[5]
+        assert [button.text for button in nav] == ["1 / 2", "Вперед ➡️"]
+
+        callback = make_callback("bday_page:2")
+        await birthdays_page_handler(callback, session, state)
+
+        rows = callback.message.edit_text.await_args.kwargs["reply_markup"].inline_keyboard
+        assert len(rows) == 2
+        nav = rows[-1]
+        assert [button.text for button in nav] == ["⬅️ Назад", "2 / 2"]
+
+
+async def test_birthdays_soon_label() -> None:
+    from datetime import timedelta
+
+    async for session in make_session():
+        soon = datetime.now(tz_utc.utc).date() + timedelta(days=3)
+        await PersonRepository(session).create(
+            123, fullname="Скоро", birth_day=soon.day, birth_month=soon.month
+        )
+        message = make_message("/birthdays_list")
+
+        await birthdays_list_handler(message, session, AsyncMock())
+
+        assert "(через 3 дня)" in message.answer.await_args.args[0]
 
 
 async def test_edit_birthday_hint_points_to_list() -> None:
@@ -339,7 +389,7 @@ async def test_edit_flow_changes_fullname() -> None:
         person_id = await seed_person(session)
 
         state = make_state()
-        callback = make_callback(f"birthday:edit:{person_id}")
+        callback = make_callback(f"edit_bday:{person_id}")
         await birthday_edit_button_handler(callback, session, state)
         state.set_state.assert_awaited_once()
         assert callback.message.edit_text.await_count == 1
@@ -374,27 +424,74 @@ async def test_edit_button_rejects_foreign_person() -> None:
         person_id = await seed_person(session, tg_id=999)
         state = make_state()
 
-        callback = make_callback(f"birthday:edit:{person_id}")
+        callback = make_callback(f"edit_bday:{person_id}")
         await birthday_edit_button_handler(callback, session, state)
 
         state.set_state.assert_not_awaited()
 
 
-async def test_delete_yes_removes_person() -> None:
+async def test_delete_confirm_and_remove() -> None:
     async for session in make_session():
         person_id = await seed_person(session)
+        state = make_state({"bday_page": 1})
 
-        await birthday_delete_yes_handler(make_callback(f"bdel_yes:{person_id}"), session)
+        callback = make_callback(f"del_bday:{person_id}")
+        await birthday_delete_button_handler(callback, session)
+
+        text = callback.message.edit_text.await_args.args[0]
+        assert "Вы уверены" in text
+        assert "Иван" in text
+        keyboard = callback.message.edit_text.await_args.kwargs["reply_markup"]
+        assert keyboard.inline_keyboard[0][0].text == "✅ Да, удалить"
+        assert keyboard.inline_keyboard[0][1].text == "❌ Отмена"
+
+        callback = make_callback(f"confirm_del_bday:{person_id}")
+        await birthday_delete_yes_handler(callback, session, state)
 
         assert await PersonRepository(session).get(person_id) is None
+        assert "успешно удалена" in callback.answer.await_args.args[0].lower()
+        assert "пока пуста" in callback.message.edit_text.await_args.args[0]
 
 
-async def test_delete_no_keeps_person() -> None:
+async def test_delete_cancel_returns_to_list() -> None:
     async for session in make_session():
         person_id = await seed_person(session)
+        state = make_state({"bday_page": 1})
+        callback = make_callback("cancel_del_bday")
 
-        await birthday_delete_no_handler(make_callback(f"bdel_no:{person_id}"), session)
+        await birthday_delete_no_handler(callback, session, state)
 
+        assert await PersonRepository(session).get(person_id) is not None
+        assert "Список дней рождения" in callback.message.edit_text.await_args.args[0]
+
+
+async def test_delete_last_on_page_returns_to_previous() -> None:
+    async for session in make_session():
+        ids = []
+        for i in range(6):
+            person = await PersonRepository(session).create(
+                123, fullname=f"Друг{i}", birth_day=1, birth_month=1
+            )
+            ids.append(person.id)
+        state = make_state({"bday_page": 2})
+
+        callback = make_callback(f"confirm_del_bday:{ids[5]}")
+        await birthday_delete_yes_handler(callback, session, state)
+
+        text = callback.message.edit_text.await_args.args[0]
+        assert "Друг5" not in text
+        rows = callback.message.edit_text.await_args.kwargs["reply_markup"].inline_keyboard
+        assert len(rows) == 5
+
+
+async def test_delete_rejects_foreign_person() -> None:
+    async for session in make_session():
+        person_id = await seed_person(session, tg_id=999)
+
+        callback = make_callback(f"del_bday:{person_id}")
+        await birthday_delete_button_handler(callback, session)
+
+        callback.answer.assert_awaited_once()
         assert await PersonRepository(session).get(person_id) is not None
 
 

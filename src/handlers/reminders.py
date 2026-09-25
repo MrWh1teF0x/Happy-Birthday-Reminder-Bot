@@ -2,7 +2,9 @@
 
 import re
 from contextlib import suppress
+from datetime import datetime
 from datetime import time as time_type
+from zoneinfo import ZoneInfo
 
 from aiogram import F, Router
 from aiogram.exceptions import TelegramBadRequest
@@ -18,18 +20,28 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.database import UserRepository, UserSettingRepository
 from src.database.models import UserSetting
+from src.handlers.pagination import (
+    build_pagination_keyboard,
+    keycap_number,
+    page_slice,
+    paginate,
+    plural,
+)
 from src.handlers.prompt import cleanup_step, warn_invalid_input
 from src.handlers.reminder_saver import DbReminderSaver
 from src.handlers.states import AddReminderSG, EditReminderStates
 
 router = Router(name="reminders")
 
-EDIT_PREFIX = "reminder:edit:"
-TOGGLE_PREFIX = "reminder:toggle:"
-DELETE_PREFIX = "reminder:del:"
-DELETE_YES_PREFIX = "rdel_yes:"
-DELETE_NO_PREFIX = "rdel_no:"
-FIELD_PREFIX = "redit:"
+REM_PAGE_PREFIX = "rem_page"
+EDIT_REM_PREFIX = "edit_rem:"
+DEL_REM_PREFIX = "del_rem:"
+CONFIRM_DEL_REM_PREFIX = "confirm_del_rem:"
+CANCEL_DEL_REM = "cancel_del_rem"
+FIELD_DAYS = "days"
+FIELD_TIME = "time"
+REM_PAGE_KEY = "rem_page"
+
 ADD_PREFIX = "rem_add:"
 ADD_DAYS_PREFIX = "rem_add:days:"
 ADD_TIME_PREFIX = "rem_add:time:"
@@ -37,8 +49,6 @@ ADD_NEW = "rem_add:new"
 ADD_ALL = "rem_add:all"
 ADD_BACK = "rem_add:back"
 ADD_CANCEL = "rem_add:cancel"
-FIELD_DAYS = "days"
-FIELD_TIME = "time"
 
 DAY_OPTIONS: tuple[tuple[str, int], ...] = (
     ("🎉 В день праздника (0)", 0),
@@ -77,6 +87,8 @@ FIELD_LABELS: dict[str, str] = {
     FIELD_TIME: "Во сколько",
 }
 
+EMPTY_REM_TEXT = "🔔 У вас нет настроенных напоминаний."
+
 _TIME_RE = re.compile(r"^\s*(\d{1,2})[:.](\d{2})\s*$")
 MAX_DAYS_BEFORE = 365
 
@@ -109,20 +121,111 @@ def format_reminder(setting: UserSetting) -> str:
     )
 
 
-def build_reminders_keyboard(settings: list[UserSetting]) -> InlineKeyboardMarkup:
-    rows = []
-    for setting in settings:
-        toggle_label = "⏸ Выкл" if setting.is_enabled else "▶️ Вкл"
-        rows.append(
-            [
-                InlineKeyboardButton(text="✏️", callback_data=f"{EDIT_PREFIX}{setting.id}"),
-                InlineKeyboardButton(
-                    text=toggle_label, callback_data=f"{TOGGLE_PREFIX}{setting.id}"
-                ),
-                InlineKeyboardButton(text="🗑", callback_data=f"{DELETE_PREFIX}{setting.id}"),
-            ]
-        )
+def utc_label(tz_name: str | None) -> str:
+    try:
+        offset = datetime.now(ZoneInfo(tz_name or "UTC")).utcoffset()
+    except Exception:
+        return "UTC"
+    hours = int(offset.total_seconds() // 3600) if offset else 0
+    return f"UTC{hours:+d}"
+
+
+def format_days_full(days: int) -> str:
+    if days == 0:
+        return "В день праздника"
+    return f"За {days} {plural(days, 'день', 'дня', 'дней')}"
+
+
+def build_reminder_card(setting: UserSetting, index: int) -> str:
+    days = format_days_full(setting.notify_days_before)
+    time = setting.notification_time.strftime("%H:%M")
+    return f"{keycap_number(index)} **{days}** — отправка в **{time}**"
+
+
+def build_reminders_page_text(settings: list[UserSetting], page: int, utc: str) -> str:
+    header = f"🔔 **Настройки напоминаний** *(Всего: {len(settings)}, {utc})*"
+    offset = (page - 1) * 5
+    cards = [
+        build_reminder_card(setting, offset + i + 1)
+        for i, setting in enumerate(settings[page_slice(page)])
+    ]
+    return header + "\n\n" + "\n\n".join(cards)
+
+
+def build_reminders_page_keyboard(
+    settings: list[UserSetting], page: int, total_pages: int
+) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = [
+        [
+            InlineKeyboardButton(
+                text="⏰ Изменить время", callback_data=f"{EDIT_REM_PREFIX}{setting.id}"
+            ),
+            InlineKeyboardButton(text="🗑 Удалить", callback_data=f"{DEL_REM_PREFIX}{setting.id}"),
+        ]
+        for setting in settings[page_slice(page)]
+    ]
+    nav = build_pagination_keyboard(REM_PAGE_PREFIX, page, total_pages)
+    if nav is not None:
+        rows.extend(nav.inline_keyboard)
     return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def build_delete_confirm_keyboard(setting_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="✅ Да, удалить",
+                    callback_data=f"{CONFIRM_DEL_REM_PREFIX}{setting_id}",
+                ),
+                InlineKeyboardButton(text="❌ Отмена", callback_data=CANCEL_DEL_REM),
+            ]
+        ]
+    )
+
+
+async def get_rem_page(state: FSMContext) -> int:
+    data = await state.get_data()
+    try:
+        return max(1, int(data.get(REM_PAGE_KEY, 1)))
+    except (TypeError, ValueError):
+        return 1
+
+
+async def answer_reminders_page(
+    message: Message, db: AsyncSession, tg_id: int, page: int, state: FSMContext
+) -> None:
+    user = await UserRepository(db).get_by_tg_id(tg_id)
+    settings = await UserSettingRepository(db).list_by_user(tg_id)
+    if not settings:
+        await message.answer(EMPTY_REM_TEXT)
+        return
+    page, total_pages = paginate(len(settings), page)
+    await state.update_data(rem_page=page)
+    utc = utc_label(user.time_zone if user else None)
+    await message.answer(
+        build_reminders_page_text(settings, page, utc),
+        reply_markup=build_reminders_page_keyboard(settings, page, total_pages),
+        parse_mode="Markdown",
+    )
+
+
+async def edit_reminders_page(
+    message: Message, db: AsyncSession, tg_id: int, page: int, state: FSMContext
+) -> None:
+    user = await UserRepository(db).get_by_tg_id(tg_id)
+    settings = await UserSettingRepository(db).list_by_user(tg_id)
+    if not settings:
+        await message.edit_text(EMPTY_REM_TEXT)
+        return
+    page, total_pages = paginate(len(settings), page)
+    await state.update_data(rem_page=page)
+    utc = utc_label(user.time_zone if user else None)
+    await message.edit_text(
+        build_reminders_page_text(settings, page, utc),
+        reply_markup=build_reminders_page_keyboard(settings, page, total_pages),
+        parse_mode="Markdown",
+    )
 
 
 def build_days_keyboard() -> InlineKeyboardMarkup:
@@ -152,14 +255,6 @@ def build_time_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def build_add_keyboard() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text="➕ Добавить напоминание", callback_data=ADD_NEW)]
-        ]
-    )
-
-
 def build_finish_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
@@ -185,27 +280,6 @@ def build_finish_text(setting: UserSetting) -> str:
     )
 
 
-def build_reminder_fields_keyboard(setting_id: int) -> InlineKeyboardMarkup:
-    rows = [
-        [InlineKeyboardButton(text=label, callback_data=f"{FIELD_PREFIX}{setting_id}:{field}")]
-        for field, label in FIELD_LABELS.items()
-    ]
-    return InlineKeyboardMarkup(inline_keyboard=rows)
-
-
-def build_delete_confirm_keyboard(setting_id: int) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                InlineKeyboardButton(
-                    text="Да, удалить", callback_data=f"{DELETE_YES_PREFIX}{setting_id}"
-                ),
-                InlineKeyboardButton(text="Нет", callback_data=f"{DELETE_NO_PREFIX}{setting_id}"),
-            ]
-        ]
-    )
-
-
 async def get_owned_setting(db: AsyncSession, tg_id: int, setting_id: int) -> UserSetting | None:
     setting = await UserSettingRepository(db).get(setting_id)
     if setting is None or setting.tg_id != tg_id:
@@ -213,45 +287,26 @@ async def get_owned_setting(db: AsyncSession, tg_id: int, setting_id: int) -> Us
     return setting
 
 
-def render_reminders_text(settings: list[UserSetting]) -> str:
-    lines = [f"{i}. {format_reminder(item)}" for i, item in enumerate(settings, 1)]
-    return "Твои оповещения:\n\n" + "\n".join(lines)
-
-
-async def show_reminders_list(message: Message, db: AsyncSession, tg_id: int) -> None:
-    settings = await UserSettingRepository(db).list_by_user(tg_id)
-    if not settings:
-        await message.answer(
-            "Оповещений пока нет. Добавь первое: /add_reminder.",
-            reply_markup=build_add_keyboard(),
-        )
-        return
-    await message.answer(
-        render_reminders_text(settings),
-        reply_markup=build_reminders_keyboard(settings),
-    )
-
-
-async def refresh_reminders_list(
-    callback: CallbackQuery, db: AsyncSession, prefix: str = ""
-) -> None:
-    if not isinstance(callback.message, Message):
-        return
-    settings = await UserSettingRepository(db).list_by_user(callback.from_user.id)
-    if not settings:
-        await callback.message.edit_text("Список пуст — добавить: /add_reminder.")
-        return
-    await callback.message.edit_text(
-        (prefix + "\n\n" if prefix else "") + render_reminders_text(settings),
-        reply_markup=build_reminders_keyboard(settings),
-    )
-
-
 @router.message(Command("reminders_list"))
-async def reminders_list_handler(message: Message, db: AsyncSession) -> None:
+async def reminders_list_handler(message: Message, db: AsyncSession, state: FSMContext) -> None:
     if message.from_user is None:
         return
-    await show_reminders_list(message, db, message.from_user.id)
+    await answer_reminders_page(message, db, message.from_user.id, 1, state)
+
+
+@router.callback_query(F.data.startswith(REM_PAGE_PREFIX + ":"))
+async def reminders_page_handler(
+    callback: CallbackQuery, db: AsyncSession, state: FSMContext
+) -> None:
+    if callback.data is None or not isinstance(callback.message, Message):
+        return
+    try:
+        page = int(callback.data.split(":")[1])
+    except (ValueError, IndexError):
+        await callback.answer("Некорректная страница.", show_alert=True)
+        return
+    await callback.answer()
+    await edit_reminders_page(callback.message, db, callback.from_user.id, page, state)
 
 
 async def start_add_flow(message: Message, db: AsyncSession, state: FSMContext) -> None:
@@ -339,7 +394,9 @@ async def finish_add_reminder(
     setting = await DbReminderSaver(db).save_reminder(tg_id, days, moment)
     settings = await UserSettingRepository(db).list_by_user(tg_id)
     await state.clear()
-    text = build_finish_text(setting) + "\n\n" + render_reminders_text(settings)
+    user = await UserRepository(db).get_by_tg_id(tg_id)
+    utc = utc_label(user.time_zone if user else None)
+    text = build_finish_text(setting) + "\n\n" + build_reminders_page_text(settings, 1, utc)
     await answer_to.answer(text, reply_markup=build_finish_keyboard(), parse_mode="Markdown")
 
 
@@ -391,38 +448,31 @@ async def reminder_cancel_handler(callback: CallbackQuery, state: FSMContext) ->
 
 
 @router.callback_query(F.data == ADD_ALL)
-async def reminder_all_handler(callback: CallbackQuery, db: AsyncSession) -> None:
+async def reminder_all_handler(
+    callback: CallbackQuery, db: AsyncSession, state: FSMContext
+) -> None:
     await callback.answer()
     if not isinstance(callback.message, Message):
         return
-    settings = await UserSettingRepository(db).list_by_user(callback.from_user.id)
-    if not settings:
-        await callback.message.edit_text(
-            "Оповещений пока нет. Добавь первое: /add_reminder.",
-            reply_markup=build_add_keyboard(),
-        )
-        return
-    await callback.message.edit_text(
-        render_reminders_text(settings),
-        reply_markup=build_reminders_keyboard(settings),
-    )
+    page = await get_rem_page(state)
+    await edit_reminders_page(callback.message, db, callback.from_user.id, page, state)
 
 
 @router.message(Command("edit_reminder"))
 async def edit_reminder_hint_handler(message: Message) -> None:
     await message.answer(
-        "Чтобы изменить оповещение, открой /reminders_list и нажми ✏️ под нужной записью."
+        "Чтобы изменить время оповещения, открой /reminders_list и нажми ⏰ под нужной записью."
     )
 
 
-@router.callback_query(F.data.startswith(EDIT_PREFIX))
-async def reminder_edit_button_handler(
+@router.callback_query(F.data.startswith(EDIT_REM_PREFIX))
+async def reminder_time_edit_button_handler(
     callback: CallbackQuery, db: AsyncSession, state: FSMContext
 ) -> None:
     if callback.from_user is None or callback.data is None:
         return
     try:
-        setting_id = int(callback.data.removeprefix(EDIT_PREFIX))
+        setting_id = int(callback.data.removeprefix(EDIT_REM_PREFIX))
     except ValueError:
         await callback.answer("Некорректная запись.", show_alert=True)
         return
@@ -430,45 +480,15 @@ async def reminder_edit_button_handler(
     if setting is None or not isinstance(callback.message, Message):
         await callback.answer("Запись не найдена.", show_alert=True)
         return
-    await state.set_state(EditReminderStates.choosing_field)
-    await state.update_data(setting_id=setting_id)
-    await callback.answer()
-    await callback.message.edit_text(
-        f"{format_reminder(setting)}\n\nЧто изменить?",
-        reply_markup=build_reminder_fields_keyboard(setting_id),
-    )
-
-
-# Без фильтра состояния: setting_id уже зашит в callback_data,
-# состояние выставляется заново внутри хендлера.
-@router.callback_query(F.data.startswith(FIELD_PREFIX))
-async def reminder_field_handler(
-    callback: CallbackQuery, db: AsyncSession, state: FSMContext
-) -> None:
-    if callback.from_user is None or callback.data is None:
-        return
-    try:
-        _, setting_id_text, field = callback.data.removeprefix(FIELD_PREFIX).split(":")
-        setting_id = int(setting_id_text)
-    except ValueError:
-        await callback.answer("Некорректное поле.", show_alert=True)
-        return
-    if field not in FIELD_LABELS:
-        await callback.answer("Некорректное поле.", show_alert=True)
-        return
-    setting = await get_owned_setting(db, callback.from_user.id, setting_id)
-    if setting is None or not isinstance(callback.message, Message):
-        await callback.answer("Запись не найдена.", show_alert=True)
-        return
     await state.set_state(EditReminderStates.waiting_for_value)
-    await state.update_data(setting_id=setting_id, field=field)
+    await state.update_data(setting_id=setting_id, field=FIELD_TIME)
     await callback.answer()
-    prompt = (
-        "Пришли число от 0 до 365."
-        if field == FIELD_DAYS
-        else "Пришли время в формате ЧЧ:ММ — например, 09:00."
+    current = setting.notification_time.strftime("%H:%M")
+    await callback.message.edit_text(
+        f"⏰ Текущее время: **{current}**.\n\n"
+        "Пришли новое время в формате ЧЧ:ММ — например, 09:00.",
+        parse_mode="Markdown",
     )
-    await callback.message.edit_text(f"{format_reminder(setting)}\n\n{prompt}")
 
 
 @router.message(EditReminderStates.waiting_for_value, F.text)
@@ -507,30 +527,24 @@ async def reminder_value_handler(message: Message, db: AsyncSession, state: FSMC
     await message.answer(f"Готово! {format_reminder(updated)}")
 
 
-@router.callback_query(F.data.startswith(TOGGLE_PREFIX))
-async def reminder_toggle_handler(callback: CallbackQuery, db: AsyncSession) -> None:
-    if callback.from_user is None or callback.data is None:
-        return
-    try:
-        setting_id = int(callback.data.removeprefix(TOGGLE_PREFIX))
-    except ValueError:
-        await callback.answer("Некорректная запись.", show_alert=True)
-        return
-    setting = await get_owned_setting(db, callback.from_user.id, setting_id)
-    if setting is None:
-        await callback.answer("Запись не найдена.", show_alert=True)
-        return
-    await UserSettingRepository(db).update(setting_id, is_enabled=not setting.is_enabled)
-    await callback.answer("Выключено." if setting.is_enabled else "Включено.")
-    await refresh_reminders_list(callback, db)
+def build_reminder_delete_text(setting: UserSetting) -> str:
+    days = format_days_full(setting.notify_days_before)
+    time = setting.notification_time.strftime("%H:%M")
+    return (
+        "⚠️ **Вы уверены, что хотите удалить напоминание?**\n"
+        "\n"
+        f"🔔 **{days} в {time}**\n"
+        "\n"
+        "*Это действие нельзя отменить.*"
+    )
 
 
-@router.callback_query(F.data.startswith(DELETE_PREFIX))
+@router.callback_query(F.data.startswith(DEL_REM_PREFIX))
 async def reminder_delete_button_handler(callback: CallbackQuery, db: AsyncSession) -> None:
     if callback.from_user is None or callback.data is None:
         return
     try:
-        setting_id = int(callback.data.removeprefix(DELETE_PREFIX))
+        setting_id = int(callback.data.removeprefix(DEL_REM_PREFIX))
     except ValueError:
         await callback.answer("Некорректная запись.", show_alert=True)
         return
@@ -540,32 +554,40 @@ async def reminder_delete_button_handler(callback: CallbackQuery, db: AsyncSessi
         return
     await callback.answer()
     await callback.message.edit_text(
-        f"Удалить оповещение?\n{format_reminder(setting)}",
+        build_reminder_delete_text(setting),
         reply_markup=build_delete_confirm_keyboard(setting_id),
+        parse_mode="Markdown",
     )
 
 
-@router.callback_query(F.data.startswith(DELETE_YES_PREFIX))
-async def reminder_delete_yes_handler(callback: CallbackQuery, db: AsyncSession) -> None:
+@router.callback_query(F.data.startswith(CONFIRM_DEL_REM_PREFIX))
+async def reminder_delete_yes_handler(
+    callback: CallbackQuery, db: AsyncSession, state: FSMContext
+) -> None:
     if callback.from_user is None or callback.data is None:
         return
     try:
-        setting_id = int(callback.data.removeprefix(DELETE_YES_PREFIX))
+        setting_id = int(callback.data.removeprefix(CONFIRM_DEL_REM_PREFIX))
     except ValueError:
         await callback.answer("Некорректная запись.", show_alert=True)
         return
     setting = await get_owned_setting(db, callback.from_user.id, setting_id)
-    if setting is None:
+    if setting is None or not isinstance(callback.message, Message):
         await callback.answer("Запись не найдена.", show_alert=True)
         return
     await UserSettingRepository(db).delete(setting_id)
-    await callback.answer("Удалено.")
-    await refresh_reminders_list(callback, db, prefix="Готово, удалил.")
+    await callback.answer("Запись успешно удалена")
+    page = await get_rem_page(state)
+    await edit_reminders_page(callback.message, db, callback.from_user.id, page, state)
 
 
-@router.callback_query(F.data.startswith(DELETE_NO_PREFIX))
-async def reminder_delete_no_handler(callback: CallbackQuery, db: AsyncSession) -> None:
+@router.callback_query(F.data == CANCEL_DEL_REM)
+async def reminder_delete_no_handler(
+    callback: CallbackQuery, db: AsyncSession, state: FSMContext
+) -> None:
     if callback.from_user is None or callback.data is None:
         return
     await callback.answer()
-    await refresh_reminders_list(callback, db)
+    if isinstance(callback.message, Message):
+        page = await get_rem_page(state)
+        await edit_reminders_page(callback.message, db, callback.from_user.id, page, state)
