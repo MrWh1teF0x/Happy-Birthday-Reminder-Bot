@@ -39,6 +39,7 @@ class UserRepository:
         if user is None:
             return None
         user.time_zone = time_zone
+        user.tz_confirmed = True
         await self._session.flush()
         return user
 

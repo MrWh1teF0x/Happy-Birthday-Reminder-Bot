@@ -37,7 +37,19 @@ async def test_user_defaults(session: AsyncSession) -> None:
 
     assert user.tg_id == 123
     assert user.time_zone == "UTC"
+    assert user.tz_confirmed is False
     assert user.created_at is not None
+
+
+async def test_set_time_zone_confirms(session: AsyncSession) -> None:
+    repo = UserRepository(session)
+    await repo.get_or_create(123)
+
+    user = await repo.set_time_zone(123, "Europe/Moscow")
+
+    assert user is not None
+    assert user.time_zone == "Europe/Moscow"
+    assert user.tz_confirmed is True
 
 
 async def test_get_or_create_returns_existing(session: AsyncSession) -> None:

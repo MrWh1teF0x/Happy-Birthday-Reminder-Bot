@@ -27,14 +27,19 @@ def is_valid_timezone(zone: str) -> bool:
 
 async def save_timezone_and_seed_reminder(
     db: AsyncSession, tg_id: int, zone: str, username: str | None = None
-) -> None:
-    """Сохраняет зону и создаёт оповещение «за 7 дней в 09:00», если их ещё нет."""
+) -> bool:
+    """Сохраняет зону и создаёт оповещение «за 7 дней в 09:00», если их ещё нет.
+
+    Возвращает True, если пояс выбран впервые (до этого не был подтверждён).
+    """
     users = UserRepository(db)
-    await users.get_or_create(tg_id, username=username)
+    existing = await users.get_or_create(tg_id, username=username)
+    is_first_choice = not existing.tz_confirmed
     await users.set_time_zone(tg_id, zone)
     settings = UserSettingRepository(db)
     if not await settings.list_by_user(tg_id):
         await settings.create(tg_id)
+    return is_first_choice
 
 
 async def request_timezone(message: Message, state: FSMContext, current: str | None = None) -> None:
