@@ -9,6 +9,7 @@ from aiogram import F, Router
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State
 from aiogram.types import (
     CallbackQuery,
     InlineKeyboardButton,
@@ -29,7 +30,7 @@ from src.handlers.pagination import (
     turning_age,
 )
 from src.handlers.prompt import cleanup_step, warn_invalid_input
-from src.handlers.states import AddBirthdaySG, EditBirthdayStates
+from src.handlers.states import AddBirthdaySG, EditBirthdaySG
 
 router = Router(name="birthdays")
 
@@ -297,19 +298,7 @@ EDIT_BDAY_PREFIX = "edit_bday:"
 DEL_BDAY_PREFIX = "del_bday:"
 CONFIRM_DEL_BDAY_PREFIX = "confirm_del_bday:"
 CANCEL_DEL_BDAY = "cancel_del_bday"
-FIELD_PREFIX = "bedit:"
-FIELD_FULLNAME = "fullname"
-FIELD_DATE = "date"
-FIELD_USERNAME = "username"
-FIELD_NOTES = "notes"
 BDAY_PAGE_KEY = "bday_page"
-
-FIELD_LABELS: dict[str, str] = {
-    FIELD_FULLNAME: "Имя",
-    FIELD_DATE: "Дата",
-    FIELD_USERNAME: "Username",
-    FIELD_NOTES: "Заметка",
-}
 
 
 def format_birthday(person: Person) -> str:
@@ -348,14 +337,6 @@ def build_birthdays_page_keyboard(
 @router.callback_query(F.data == "noop")
 async def noop_handler(callback: CallbackQuery) -> None:
     await callback.answer()
-
-
-def build_fields_keyboard(person_id: int) -> InlineKeyboardMarkup:
-    rows = [
-        [InlineKeyboardButton(text=label, callback_data=f"{FIELD_PREFIX}{person_id}:{field}")]
-        for field, label in FIELD_LABELS.items()
-    ]
-    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def build_delete_confirm_keyboard(person_id: int) -> InlineKeyboardMarkup:
@@ -514,87 +495,285 @@ async def birthday_edit_button_handler(
     if person is None or not isinstance(callback.message, Message):
         await callback.answer("Запись не найдена.", show_alert=True)
         return
-    await state.set_state(EditBirthdayStates.choosing_field)
-    await state.update_data(person_id=person_id)
+    await state.update_data(bday_id=person_id)
     await callback.answer()
     await callback.message.edit_text(
-        f"{format_birthday(person)}\n\nЧто изменить?",
-        reply_markup=build_fields_keyboard(person_id),
+        build_edit_menu_text(person),
+        reply_markup=build_edit_menu_keyboard(),
+        parse_mode="Markdown",
     )
 
 
-# Без фильтра состояния: person_id уже зашит в callback_data,
-# состояние выставляется заново внутри хендлера.
-@router.callback_query(F.data.startswith(FIELD_PREFIX))
-async def birthday_field_handler(
+FIELD_BDAY_PREFIX = "field_bday:"
+EDIT_FIELD_NAME = "name"
+EDIT_FIELD_DATE = "date"
+EDIT_FIELD_NOTE = "note"
+CANCEL_EDIT = "cancel_edit"
+CLEAR_NOTE = "clear_note"
+EDIT_PROMPT_KEY = "edit_prompt_id"
+
+NAME_PROMPT = "👤 Введите новое имя именинника:"
+DATE_PROMPT = "📅 Введите новую дату в формате **ДД.ММ** или **ДД.ММ.ГГГГ**:"
+NOTE_PROMPT = "🎁 Введите новую заметку или нажмите кнопку очистки:"
+
+
+def build_edit_menu_text(person: Person) -> str:
+    date = format_birthday_long(person.birth_day, person.birth_month, person.birth_year)
+    note = person.notes if person.notes else "нет"
+    return (
+        f"✏️ **Редактирование:** {person.fullname}\n"
+        "\n"
+        "**Текущие данные:**\n"
+        f"👤 Имя: {person.fullname}\n"
+        f"📅 Дата: {date}\n"
+        f"🎁 Заметка: {note}\n"
+        "\n"
+        "*Выберите, что хотите изменить:*"
+    )
+
+
+def build_edit_menu_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="👤 Имя", callback_data=f"{FIELD_BDAY_PREFIX}{EDIT_FIELD_NAME}"
+                ),
+                InlineKeyboardButton(
+                    text="📅 Дату", callback_data=f"{FIELD_BDAY_PREFIX}{EDIT_FIELD_DATE}"
+                ),
+                InlineKeyboardButton(
+                    text="🎁 Заметку", callback_data=f"{FIELD_BDAY_PREFIX}{EDIT_FIELD_NOTE}"
+                ),
+            ],
+            [InlineKeyboardButton(text="◀️ Назад к списку", callback_data=f"{BDAY_PAGE_PREFIX}:1")],
+        ]
+    )
+
+
+def build_edit_cancel_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[[InlineKeyboardButton(text="❌ Отмена", callback_data=CANCEL_EDIT)]]
+    )
+
+
+def build_note_edit_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="🗑 Очистить заметку", callback_data=CLEAR_NOTE)],
+            [InlineKeyboardButton(text="❌ Отмена", callback_data=CANCEL_EDIT)],
+        ]
+    )
+
+
+def build_edit_confirm_text(person: Person) -> str:
+    date = format_birthday_long(person.birth_day, person.birth_month, person.birth_year)
+    note = person.notes if person.notes else "нет"
+    return (
+        "✅ **День рождения обновлён!**\n"
+        "\n"
+        f"👤 **Имя:** {person.fullname}\n"
+        f"📅 **Дата:** {date}\n"
+        f"📝 **Заметка:** {note}"
+    )
+
+
+def build_back_to_list_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="📋 Назад к списку", callback_data=f"{BDAY_PAGE_PREFIX}:1")]
+        ]
+    )
+
+
+async def show_field_prompt(
+    target: Message,
+    state: FSMContext,
+    new_state: State,
+    prompt: str,
+    keyboard: InlineKeyboardMarkup,
+) -> None:
+    await state.set_state(new_state)
+    sent = await target.edit_text(prompt, reply_markup=keyboard, parse_mode="Markdown")
+    if isinstance(sent, Message):
+        await state.update_data(edit_prompt_id=sent.message_id)
+
+
+def parse_bday_id(data: dict[str, object]) -> int | None:
+    raw = data.get("bday_id")
+    if isinstance(raw, bool):
+        return None
+    if isinstance(raw, int):
+        return raw
+    if isinstance(raw, str):
+        try:
+            return int(raw)
+        except ValueError:
+            return None
+    return None
+
+
+@router.callback_query(F.data.startswith(FIELD_BDAY_PREFIX))
+async def birthday_edit_field_handler(
     callback: CallbackQuery, db: AsyncSession, state: FSMContext
 ) -> None:
     if callback.from_user is None or callback.data is None:
         return
-    try:
-        _, person_id_text, field = callback.data.removeprefix(FIELD_PREFIX).split(":")
-        person_id = int(person_id_text)
-    except ValueError:
+    field = callback.data.removeprefix(FIELD_BDAY_PREFIX)
+    if field not in (EDIT_FIELD_NAME, EDIT_FIELD_DATE, EDIT_FIELD_NOTE):
         await callback.answer("Некорректное поле.", show_alert=True)
         return
-    if field not in FIELD_LABELS:
-        await callback.answer("Некорректное поле.", show_alert=True)
+    data = await state.get_data()
+    person_id = parse_bday_id(data)
+    if person_id is None:
+        await callback.answer("Начни заново: /birthdays_list.", show_alert=True)
         return
     person = await get_owned_person(db, callback.from_user.id, person_id)
     if person is None or not isinstance(callback.message, Message):
         await callback.answer("Запись не найдена.", show_alert=True)
         return
-    await state.set_state(EditBirthdayStates.waiting_for_value)
-    await state.update_data(person_id=person_id, field=field)
     await callback.answer()
-    prompts = {
-        FIELD_FULLNAME: "Пришли новое имя.",
-        FIELD_DATE: "Пришли новую дату в формате ДД.ММ или ДД.ММ.ГГГГ.",
-        FIELD_USERNAME: "Пришли новый username (без @) или «-», чтобы убрать.",
-        FIELD_NOTES: "Пришли новую заметку или «-», чтобы убрать.",
-    }
-    await callback.message.edit_text(f"{format_birthday(person)}\n\n{prompts[field]}")
+    if field == EDIT_FIELD_NAME:
+        await show_field_prompt(
+            callback.message,
+            state,
+            EditBirthdaySG.waiting_for_new_name,
+            NAME_PROMPT,
+            build_edit_cancel_keyboard(),
+        )
+    elif field == EDIT_FIELD_DATE:
+        await show_field_prompt(
+            callback.message,
+            state,
+            EditBirthdaySG.waiting_for_new_date,
+            DATE_PROMPT,
+            build_edit_cancel_keyboard(),
+        )
+    else:
+        await show_field_prompt(
+            callback.message,
+            state,
+            EditBirthdaySG.waiting_for_new_note,
+            NOTE_PROMPT,
+            build_note_edit_keyboard(),
+        )
 
 
-@router.message(EditBirthdayStates.waiting_for_value, F.text)
-async def birthday_value_handler(message: Message, db: AsyncSession, state: FSMContext) -> None:
+@router.message(EditBirthdaySG.waiting_for_new_name, F.text)
+async def birthday_new_name_handler(message: Message, db: AsyncSession, state: FSMContext) -> None:
     if message.from_user is None:
         return
+    value = (message.text or "").strip()
+    if not value or len(value) > 255:
+        await warn_invalid_input(
+            message, state, EDIT_PROMPT_KEY, NAME_PROMPT, build_edit_cancel_keyboard()
+        )
+        return
     data = await state.get_data()
-    person = await get_owned_person(db, message.from_user.id, int(data.get("person_id", -1)))
+    await finish_bday_edit(db, state, message.from_user.id, data, {"fullname": value}, message)
+
+
+@router.message(EditBirthdaySG.waiting_for_new_date, F.text)
+async def birthday_new_date_handler(message: Message, db: AsyncSession, state: FSMContext) -> None:
+    if message.from_user is None:
+        return
+    parsed = parse_birthday_date((message.text or "").strip())
+    if parsed is None:
+        await warn_invalid_input(
+            message, state, EDIT_PROMPT_KEY, DATE_PROMPT, build_edit_cancel_keyboard()
+        )
+        return
+    day, month, year = parsed
+    data = await state.get_data()
+    await finish_bday_edit(
+        db,
+        state,
+        message.from_user.id,
+        data,
+        {"birth_day": day, "birth_month": month, "birth_year": year},
+        message,
+    )
+
+
+@router.message(EditBirthdaySG.waiting_for_new_note, F.text)
+async def birthday_new_note_handler(message: Message, db: AsyncSession, state: FSMContext) -> None:
+    if message.from_user is None:
+        return
+    value = (message.text or "").strip()
+    if not value:
+        await warn_invalid_input(
+            message, state, EDIT_PROMPT_KEY, NOTE_PROMPT, build_note_edit_keyboard()
+        )
+        return
+    data = await state.get_data()
+    await finish_bday_edit(db, state, message.from_user.id, data, {"notes": value}, message)
+
+
+async def finish_bday_edit(
+    db: AsyncSession,
+    state: FSMContext,
+    tg_id: int,
+    data: dict[str, object],
+    updates: dict[str, object],
+    answer_to: Message,
+) -> None:
+    person_id = parse_bday_id(data)
+    if person_id is None:
+        await state.clear()
+        await answer_to.answer("Начни заново: /birthdays_list.")
+        return
+    person = await get_owned_person(db, tg_id, person_id)
     if person is None:
         await state.clear()
-        await message.answer("Запись не найдена. Открой /birthdays_list и попробуй снова.")
-        return
-    field = data.get("field")
-    value = (message.text or "").strip()
-    updates: dict[str, object]
-    if field == FIELD_FULLNAME:
-        if not value or len(value) > 255:
-            await message.answer("Имя должно быть от 1 до 255 символов. Попробуй ещё раз.")
-            return
-        updates = {"fullname": value}
-    elif field == FIELD_DATE:
-        parsed = parse_birthday_date(value)
-        if parsed is None:
-            await message.answer("Не понял дату. Формат: ДД.ММ или ДД.ММ.ГГГГ.")
-            return
-        day, month, year = parsed
-        updates = {"birth_day": day, "birth_month": month, "birth_year": year}
-    elif field == FIELD_USERNAME:
-        updates = {"username": None if value == "-" else value.lstrip("@")}
-    elif field == FIELD_NOTES:
-        updates = {"notes": None if value == "-" else value}
-    else:
-        await state.clear()
-        await message.answer("Неизвестное поле. Открой /birthdays_list и попробуй снова.")
+        await answer_to.answer("Запись не найдена. Открой /birthdays_list и попробуй снова.")
         return
     updated = await PersonRepository(db).update(person.id, **updates)
     await state.clear()
     if updated is None:
-        await message.answer("Не удалось сохранить. Попробуй снова: /birthdays_list.")
+        await answer_to.answer("Не удалось сохранить. Попробуй снова: /birthdays_list.")
         return
-    await message.answer(f"Готово! {format_birthday(updated)}")
+    await answer_to.answer(
+        build_edit_confirm_text(updated),
+        reply_markup=build_back_to_list_keyboard(),
+        parse_mode="Markdown",
+    )
+
+
+@router.callback_query(F.data == CLEAR_NOTE)
+async def birthday_clear_note_handler(
+    callback: CallbackQuery, db: AsyncSession, state: FSMContext
+) -> None:
+    data = await state.get_data()
+    person_id = parse_bday_id(data)
+    if person_id is None:
+        await callback.answer("Начни заново: /birthdays_list.", show_alert=True)
+        return
+    if callback.from_user is None or not isinstance(callback.message, Message):
+        return
+    person = await get_owned_person(db, callback.from_user.id, person_id)
+    if person is None:
+        await callback.answer("Запись не найдена.", show_alert=True)
+        return
+    updated = await PersonRepository(db).update(person.id, notes=None)
+    await state.clear()
+    await callback.answer("Заметка очищена.")
+    if updated is None:
+        return
+    await callback.message.edit_text(
+        build_edit_confirm_text(updated),
+        reply_markup=build_back_to_list_keyboard(),
+        parse_mode="Markdown",
+    )
+
+
+@router.callback_query(F.data == CANCEL_EDIT)
+async def birthday_edit_cancel_handler(
+    callback: CallbackQuery, db: AsyncSession, state: FSMContext
+) -> None:
+    await state.clear()
+    await callback.answer()
+    if isinstance(callback.message, Message):
+        await edit_birthdays_page(callback.message, db, callback.from_user.id, 1, state)
 
 
 @router.callback_query(F.data.startswith(DEL_BDAY_PREFIX))

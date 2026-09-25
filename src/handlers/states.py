@@ -11,9 +11,10 @@ class AddBirthdaySG(StatesGroup):
     waiting_for_note = State()
 
 
-class EditBirthdayStates(StatesGroup):
-    choosing_field = State()
-    waiting_for_value = State()
+class EditBirthdaySG(StatesGroup):
+    waiting_for_new_name = State()
+    waiting_for_new_date = State()
+    waiting_for_new_note = State()
 
 
 class AddReminderSG(StatesGroup):

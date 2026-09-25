@@ -478,7 +478,9 @@ def build_time_edit_text(setting: UserSetting) -> str:
 
 def build_time_edit_cancel_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
-        inline_keyboard=[[InlineKeyboardButton(text="❌ Отмена", callback_data=EDIT_REM_CANCEL)]]
+        inline_keyboard=[
+            [InlineKeyboardButton(text="◀️ Назад к списку", callback_data=EDIT_REM_CANCEL)]
+        ]
     )
 
 
@@ -513,6 +515,7 @@ async def reminder_time_edit_button_handler(
     await callback.answer()
     await callback.message.edit_text(
         build_time_edit_text(setting),
+        reply_markup=build_time_edit_cancel_keyboard(),
         parse_mode="Markdown",
     )
     await state.update_data(time_edit_prompt_id=callback.message.message_id)

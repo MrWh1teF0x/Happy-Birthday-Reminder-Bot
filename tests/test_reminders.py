@@ -353,6 +353,8 @@ async def test_time_edit_flow_changes_time() -> None:
         await reminder_time_edit_button_handler(callback, session, state)
         state.set_state.assert_awaited_once()
         assert "09:00" in callback.message.edit_text.await_args.args[0]
+        keyboard = callback.message.edit_text.await_args.kwargs["reply_markup"]
+        assert keyboard.inline_keyboard[0][0].text == "◀️ Назад к списку"
 
         state = make_state({"setting_id": setting_id, "field": "time"})
         message = make_message("10:00")
@@ -380,7 +382,7 @@ async def test_time_edit_rejects_bad_time() -> None:
         assert edited.args[0].startswith("⚠️ Время введено некорректно")
         assert "Текущее время" in edited.args[0]
         keyboard = edited.kwargs["reply_markup"]
-        assert keyboard.inline_keyboard[0][0].text == "❌ Отмена"
+        assert keyboard.inline_keyboard[0][0].text == "◀️ Назад к списку"
         state.clear.assert_not_awaited()
         setting = await UserSettingRepository(session).get(setting_id)
         assert setting is not None

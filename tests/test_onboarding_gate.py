@@ -107,7 +107,7 @@ async def test_allows_timezone_buttons() -> None:
 async def test_blocks_other_buttons_with_alert() -> None:
     async for session in make_session():
         await UserRepository(session).get_or_create(123)
-        callback = make_callback("bedit:1:fullname")
+        callback = make_callback("edit_bday:1")
 
         handler = await run_middleware(callback, session)
 

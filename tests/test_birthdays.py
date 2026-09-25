@@ -18,20 +18,25 @@ from src.handlers.birthdays import (
     ADD_CANCEL,
     ADD_LIST,
     ADD_SKIP_NOTE,
+    CANCEL_EDIT,
     add_birthday_handler,
     birthday_again_handler,
     birthday_cancel_handler,
+    birthday_clear_note_handler,
     birthday_date_handler,
     birthday_delete_button_handler,
     birthday_delete_no_handler,
     birthday_delete_yes_handler,
     birthday_edit_button_handler,
-    birthday_field_handler,
+    birthday_edit_cancel_handler,
+    birthday_edit_field_handler,
     birthday_list_button_handler,
     birthday_name_handler,
+    birthday_new_date_handler,
+    birthday_new_name_handler,
+    birthday_new_note_handler,
     birthday_note_handler,
     birthday_skip_note_handler,
-    birthday_value_handler,
     birthdays_list_handler,
     birthdays_page_handler,
     edit_birthday_hint_handler,
@@ -40,7 +45,7 @@ from src.handlers.birthdays import (
     parse_birthday_date,
 )
 from src.handlers.birthdays import router as birthdays_router
-from src.handlers.states import AddBirthdaySG
+from src.handlers.states import AddBirthdaySG, EditBirthdaySG
 
 
 async def make_session() -> AsyncIterator[AsyncSession]:
@@ -442,39 +447,114 @@ async def test_edit_birthday_hint_points_to_list() -> None:
     assert "/birthdays_list" in message.answer.await_args.args[0]
 
 
-async def test_edit_flow_changes_fullname() -> None:
+async def test_edit_menu_shows_current_data() -> None:
     async for session in make_session():
         person_id = await seed_person(session)
 
         state = make_state()
         callback = make_callback(f"edit_bday:{person_id}")
         await birthday_edit_button_handler(callback, session, state)
-        state.set_state.assert_awaited_once()
-        assert callback.message.edit_text.await_count == 1
 
-        state = make_state({"person_id": person_id})
-        callback = make_callback(f"bedit:{person_id}:fullname")
-        await birthday_field_handler(callback, session, state)
+        text = callback.message.edit_text.await_args.args[0]
+        assert "Редактирование:" in text
+        assert "Иван" in text
+        assert "12 мая 2000" in text
+        keyboard = callback.message.edit_text.await_args.kwargs["reply_markup"]
+        labels = [button.text for row in keyboard.inline_keyboard for button in row]
+        assert labels == ["👤 Имя", "📅 Дату", "🎁 Заметку", "◀️ Назад к списку"]
 
-        state = make_state({"person_id": person_id, "field": "fullname"})
+
+async def test_edit_flow_changes_name() -> None:
+    async for session in make_session():
+        person_id = await seed_person(session)
+
+        state = make_state({"bday_id": person_id})
+        callback = make_callback("field_bday:name")
+        await birthday_edit_field_handler(callback, session, state)
+        state.set_state.assert_awaited_once_with(EditBirthdaySG.waiting_for_new_name)
+        assert "новое имя" in callback.message.edit_text.await_args.args[0]
+
+        state = make_state({"bday_id": person_id})
         message = make_message("Пётр")
-        await birthday_value_handler(message, session, state)
+        await birthday_new_name_handler(message, session, state)
         state.clear.assert_awaited_once()
 
         person = await PersonRepository(session).get(person_id)
         assert person is not None and person.fullname == "Пётр"
+        text = message.answer.await_args.args[0]
+        assert "обновлён" in text
+        keyboard = message.answer.await_args.kwargs["reply_markup"]
+        assert keyboard.inline_keyboard[0][0].text == "📋 Назад к списку"
+
+
+async def test_edit_flow_changes_date() -> None:
+    async for session in make_session():
+        person_id = await seed_person(session)
+
+        state = make_state({"bday_id": person_id})
+        callback = make_callback("field_bday:date")
+        await birthday_edit_field_handler(callback, session, state)
+        state.set_state.assert_awaited_once_with(EditBirthdaySG.waiting_for_new_date)
+
+        state = make_state({"bday_id": person_id})
+        await birthday_new_date_handler(make_message("01.02.2001"), session, state)
+        state.clear.assert_awaited_once()
+
+        person = await PersonRepository(session).get(person_id)
+        assert person is not None
+        assert (person.birth_day, person.birth_month, person.birth_year) == (1, 2, 2001)
 
 
 async def test_edit_flow_rejects_bad_date() -> None:
     async for session in make_session():
         person_id = await seed_person(session)
-        state = make_state({"person_id": person_id, "field": "date"})
+        state = make_state({"bday_id": person_id, "edit_prompt_id": 44})
+        message = make_message("30.02")
 
-        await birthday_value_handler(make_message("30.02"), session, state)
+        await birthday_new_date_handler(message, session, state)
 
         state.clear.assert_not_awaited()
+        message.delete.assert_awaited_once()
+        edited = message.bot.edit_message_text.await_args
+        assert edited.kwargs["message_id"] == 44
         person = await PersonRepository(session).get(person_id)
         assert person is not None and person.birth_day == 12
+
+
+async def test_edit_flow_changes_note_and_clears_it() -> None:
+    async for session in make_session():
+        person_id = await seed_person(session)
+
+        state = make_state({"bday_id": person_id})
+        callback = make_callback("field_bday:note")
+        await birthday_edit_field_handler(callback, session, state)
+        state.set_state.assert_awaited_once_with(EditBirthdaySG.waiting_for_new_note)
+        keyboard = callback.message.edit_text.await_args.kwargs["reply_markup"]
+        assert keyboard.inline_keyboard[0][0].text == "🗑 Очистить заметку"
+
+        state = make_state({"bday_id": person_id})
+        await birthday_new_note_handler(make_message("Дарить книги"), session, state)
+        person = await PersonRepository(session).get(person_id)
+        assert person is not None and person.notes == "Дарить книги"
+
+        state = make_state({"bday_id": person_id})
+        callback = make_callback("clear_note")
+        await birthday_clear_note_handler(callback, session, state)
+        state.clear.assert_awaited_once()
+        person = await PersonRepository(session).get(person_id)
+        assert person is not None and person.notes is None
+
+
+async def test_edit_cancel_returns_to_list() -> None:
+    async for session in make_session():
+        await seed_person(session)
+        state = make_state({"bday_id": 1})
+        callback = make_callback(CANCEL_EDIT)
+
+        await birthday_edit_cancel_handler(callback, session, state)
+
+        state.clear.assert_awaited_once()
+        assert "Список дней рождения" in callback.message.edit_text.await_args.args[0]
 
 
 async def test_edit_button_rejects_foreign_person() -> None:
@@ -486,6 +566,7 @@ async def test_edit_button_rejects_foreign_person() -> None:
         await birthday_edit_button_handler(callback, session, state)
 
         state.set_state.assert_not_awaited()
+        state.update_data.assert_not_awaited()
 
 
 async def test_delete_confirm_and_remove() -> None:
