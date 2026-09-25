@@ -1,4 +1,4 @@
-"""Добавление дня рождения: имя → дата ДД.ММ[.ГГГГ]."""
+"""Дни рождения: пошаговое добавление (AddBirthdaySG), список, редактирование."""
 
 import re
 from datetime import datetime
@@ -16,15 +16,97 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.database import PersonRepository, UserRepository
 from src.database.models import Person
-from src.handlers.states import BirthdayStates, EditBirthdayStates
+from src.handlers.birthday_saver import BirthdayDraft, DbBirthdaySaver
+from src.handlers.states import AddBirthdaySG, EditBirthdayStates
 
 router = Router(name="birthdays")
 
-_DATE_RE = re.compile(r"^\s*(\d{1,2})\.(\d{1,2})(?:\.(\d{4}))?\s*$")
+_DATE_RE = re.compile(r"^\s*(\d{1,2})\s*[.\-/\s]\s*(\d{1,2})(?:\s*[.\-/\s]\s*(\d{4}))?\s*$")
+
+MONTHS_GENITIVE: tuple[str, ...] = (
+    "января",
+    "февраля",
+    "марта",
+    "апреля",
+    "мая",
+    "июня",
+    "июля",
+    "августа",
+    "сентября",
+    "октября",
+    "ноября",
+    "декабря",
+)
+
+ADD_CANCEL = "add_bday:cancel"
+ADD_SKIP_NOTE = "add_bday:skip_note"
+ADD_AGAIN = "add_bday:again"
+ADD_LIST = "add_bday:list"
+
+STEP1_TEXT = (
+    "👤 **Шаг 1 из 3: Имя именинника**\n"
+    "\n"
+    "Напишите имя и фамилию человека (например: *Мама*, *Алексей*, *Катя HR*):"
+)
+
+STEP3_TEXT = (
+    "📝 **Шаг 3 из 3: Заметка или идеи подарка**\n"
+    "\n"
+    "Напишите заметку или идею подарка (например: *Любит книги про историю*):\n"
+    "\n"
+    "Если заметка не нужна, нажмите кнопку ниже:"
+)
+
+DATE_ERROR_TEXT = (
+    "⚠️ Некорректный формат даты. Попробуйте еще раз (например: `12.09` или `12.09.1995`)."
+)
+
+CANCELLED_TEXT = "Добавление отменено"
 
 
-def parse_birthday(text: str) -> tuple[int, int, int | None] | None:
-    """Парсит ДД.ММ[.ГГГГ], проверяет реальность даты. 29.02 без года — ок."""
+def step2_text(fullname: str) -> str:
+    return (
+        "📅 **Шаг 2 из 3: Дата рождения**\n"
+        "\n"
+        f"Напишите дату рождения для **{fullname}** в формате **ДД.ММ** или **ДД.ММ.ГГГГ** "
+        "(например: `12.09` или `12.09.1995`):\n"
+        "\n"
+        "*Указание года необязательно.*"
+    )
+
+
+def build_cancel_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[[InlineKeyboardButton(text="❌ Отмена", callback_data=ADD_CANCEL)]]
+    )
+
+
+def build_note_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="➡️ Без заметки", callback_data=ADD_SKIP_NOTE)],
+            [InlineKeyboardButton(text="❌ Отмена", callback_data=ADD_CANCEL)],
+        ]
+    )
+
+
+def build_finish_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="➕ Добавить еще", callback_data=ADD_AGAIN)],
+            [InlineKeyboardButton(text="📋 Мой список ДР", callback_data=ADD_LIST)],
+        ]
+    )
+
+
+def build_add_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[[InlineKeyboardButton(text="➕ Добавить", callback_data=ADD_AGAIN)]]
+    )
+
+
+def parse_birthday_date(text: str) -> tuple[int, int, int | None] | None:
+    """Парсит ДД.ММ[.ГГГГ] с разделителями . - / пробел. 29.02 без года — ок."""
     match = _DATE_RE.match(text)
     if match is None:
         return None
@@ -37,6 +119,62 @@ def parse_birthday(text: str) -> tuple[int, int, int | None] | None:
     return day, month, year
 
 
+def format_birthday_long(day: int, month: int, year: int | None) -> str:
+    text = f"{day} {MONTHS_GENITIVE[month - 1]}"
+    if year is not None:
+        text += f" {year}"
+    return text
+
+
+def build_finish_text(draft: BirthdayDraft) -> str:
+    note = draft.note if draft.note else "нет"
+    date = format_birthday_long(draft.day, draft.month, draft.year)
+    return (
+        "🎉 **День рождения успешно сохранен!**\n"
+        "\n"
+        f"👤 **Именинник:** {draft.fullname}\n"
+        f"📅 **Дата:** {date}\n"
+        f"🎁 **Заметка:** {note}"
+    )
+
+
+async def finish_add_birthday(
+    db: AsyncSession,
+    state: FSMContext,
+    tg_id: int,
+    note: str | None,
+    edit_message: Message | None,
+    answer_to: Message,
+) -> None:
+    data = await state.get_data()
+    try:
+        draft = BirthdayDraft(
+            fullname=data["fullname"],
+            day=int(data["day"]),
+            month=int(data["month"]),
+            year=data.get("year"),
+            note=note,
+        )
+    except (KeyError, TypeError, ValueError):
+        await state.clear()
+        await answer_to.answer("Что-то пошло не так. Начни заново: /add_birthday.")
+        return
+    await DbBirthdaySaver(db).save_birthday(tg_id, draft)
+    await state.clear()
+    if edit_message is not None:
+        await edit_message.edit_text(
+            build_finish_text(draft),
+            reply_markup=build_finish_keyboard(),
+            parse_mode="Markdown",
+        )
+    else:
+        await answer_to.answer(
+            build_finish_text(draft),
+            reply_markup=build_finish_keyboard(),
+            parse_mode="Markdown",
+        )
+
+
 @router.message(Command("add_birthday"))
 async def add_birthday_handler(message: Message, db: AsyncSession, state: FSMContext) -> None:
     if message.from_user is None:
@@ -44,50 +182,95 @@ async def add_birthday_handler(message: Message, db: AsyncSession, state: FSMCon
     await UserRepository(db).get_or_create(
         message.from_user.id, username=message.from_user.username
     )
-    await state.set_state(BirthdayStates.waiting_for_fullname)
-    await message.answer("Как зовут именинника? Пришли имя.")
+    await state.set_state(AddBirthdaySG.waiting_for_name)
+    await message.answer(STEP1_TEXT, reply_markup=build_cancel_keyboard(), parse_mode="Markdown")
 
 
-@router.message(BirthdayStates.waiting_for_fullname, F.text)
+@router.message(AddBirthdaySG.waiting_for_name, F.text)
 async def birthday_name_handler(message: Message, state: FSMContext) -> None:
     fullname = (message.text or "").strip()
     if not fullname:
-        await message.answer("Имя не может быть пустым. Пришли имя именинника.")
+        await message.answer("Имя не может быть пустым. Напиши имя именинника.")
         return
     if len(fullname) > 255:
-        await message.answer("Слишком длинное имя (максимум 255 символов). Пришли покороче.")
+        await message.answer("Слишком длинное имя (максимум 255 символов). Напиши покороче.")
         return
     await state.update_data(fullname=fullname)
-    await state.set_state(BirthdayStates.waiting_for_date)
+    await state.set_state(AddBirthdaySG.waiting_for_date)
     await message.answer(
-        f"Записал: {fullname}. Теперь пришли дату рождения в формате ДД.ММ или ДД.ММ.ГГГГ "
-        "(например, 12.05 или 12.05.2000)."
+        step2_text(fullname), reply_markup=build_cancel_keyboard(), parse_mode="Markdown"
     )
 
 
-@router.message(BirthdayStates.waiting_for_date, F.text)
-async def birthday_date_handler(message: Message, db: AsyncSession, state: FSMContext) -> None:
-    if message.from_user is None:
-        return
-    parsed = parse_birthday(message.text or "")
+@router.message(AddBirthdaySG.waiting_for_date, F.text)
+async def birthday_date_handler(message: Message, state: FSMContext) -> None:
+    parsed = parse_birthday_date(message.text or "")
     if parsed is None:
-        await message.answer(
-            "Не понял дату. Нужен формат ДД.ММ или ДД.ММ.ГГГГ — например, 12.05 или 12.05.2000."
-        )
+        await message.answer(DATE_ERROR_TEXT, parse_mode="Markdown")
         return
     day, month, year = parsed
-    data = await state.get_data()
-    person = await PersonRepository(db).create(
-        message.from_user.id,
-        fullname=data.get("fullname", "Без имени"),
-        birth_day=day,
-        birth_month=month,
-        birth_year=year,
+    await state.update_data(day=day, month=month, year=year)
+    await state.set_state(AddBirthdaySG.waiting_for_note)
+    await message.answer(STEP3_TEXT, reply_markup=build_note_keyboard(), parse_mode="Markdown")
+
+
+@router.message(AddBirthdaySG.waiting_for_note, F.text)
+async def birthday_note_handler(message: Message, db: AsyncSession, state: FSMContext) -> None:
+    if message.from_user is None:
+        return
+    await finish_add_birthday(
+        db, state, message.from_user.id, (message.text or "").strip(), None, message
     )
+
+
+@router.callback_query(F.data == ADD_SKIP_NOTE)
+async def birthday_skip_note_handler(
+    callback: CallbackQuery, db: AsyncSession, state: FSMContext
+) -> None:
+    if callback.from_user is None:
+        return
+    data = await state.get_data()
+    if "fullname" not in data or "day" not in data or "month" not in data:
+        await callback.answer("Начни добавление заново: /add_birthday.", show_alert=True)
+        return
+    await callback.answer()
+    target = callback.message if isinstance(callback.message, Message) else None
+    if target is None:
+        return
+    await finish_add_birthday(db, state, callback.from_user.id, None, target, target)
+
+
+@router.callback_query(F.data == ADD_CANCEL)
+async def birthday_cancel_handler(callback: CallbackQuery, state: FSMContext) -> None:
     await state.clear()
-    date_text = f"{day:02d}.{month:02d}" + (f".{year}" if year else "")
-    await message.answer(
-        f"Готово! {person.fullname} — {date_text}. Посмотреть всех: /birthdays_list."
+    await callback.answer()
+    if isinstance(callback.message, Message):
+        await callback.message.edit_text(CANCELLED_TEXT)
+
+
+@router.callback_query(F.data == ADD_AGAIN)
+async def birthday_again_handler(callback: CallbackQuery, state: FSMContext) -> None:
+    await state.set_state(AddBirthdaySG.waiting_for_name)
+    await callback.answer()
+    if isinstance(callback.message, Message):
+        await callback.message.edit_text(
+            STEP1_TEXT, reply_markup=build_cancel_keyboard(), parse_mode="Markdown"
+        )
+
+
+@router.callback_query(F.data == ADD_LIST)
+async def birthday_list_button_handler(callback: CallbackQuery, db: AsyncSession) -> None:
+    await callback.answer()
+    if not isinstance(callback.message, Message):
+        return
+    persons = await PersonRepository(db).list_by_owner(callback.from_user.id)
+    if not persons:
+        await callback.message.edit_text(EMPTY_LIST_TEXT, reply_markup=build_add_keyboard())
+        return
+    lines = [f"{i}. {format_birthday(person)}" for i, person in enumerate(persons, 1)]
+    await callback.message.edit_text(
+        "Сохранённые дни рождения:\n\n" + "\n".join(lines),
+        reply_markup=build_birthdays_keyboard(persons),
     )
 
 
@@ -170,7 +353,7 @@ async def get_owned_person(db: AsyncSession, tg_id: int, person_id: int) -> Pers
 async def render_birthdays(message: Message, db: AsyncSession, tg_id: int) -> None:
     persons = await PersonRepository(db).list_by_owner(tg_id)
     if not persons:
-        await message.answer(EMPTY_LIST_TEXT)
+        await message.answer(EMPTY_LIST_TEXT, reply_markup=build_add_keyboard())
         return
     lines = [f"{i}. {format_birthday(person)}" for i, person in enumerate(persons, 1)]
     await message.answer(
@@ -269,7 +452,7 @@ async def birthday_value_handler(message: Message, db: AsyncSession, state: FSMC
             return
         updates = {"fullname": value}
     elif field == FIELD_DATE:
-        parsed = parse_birthday(value)
+        parsed = parse_birthday_date(value)
         if parsed is None:
             await message.answer("Не понял дату. Формат: ДД.ММ или ДД.ММ.ГГГГ.")
             return

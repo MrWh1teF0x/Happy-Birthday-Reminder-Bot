@@ -5,9 +5,10 @@ class TimezoneStates(StatesGroup):
     waiting_for_timezone = State()
 
 
-class BirthdayStates(StatesGroup):
-    waiting_for_fullname = State()
+class AddBirthdaySG(StatesGroup):
+    waiting_for_name = State()
     waiting_for_date = State()
+    waiting_for_note = State()
 
 
 class EditBirthdayStates(StatesGroup):
