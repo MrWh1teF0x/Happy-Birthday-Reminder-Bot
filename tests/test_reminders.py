@@ -215,6 +215,8 @@ async def test_reminder_days_invalid_warns_on_prompt() -> None:
     assert edited.kwargs["message_id"] == 42
     assert edited.args[0].startswith("⚠️")
     assert "Шаг 1 из 2" in edited.args[0]
+    keyboard = edited.kwargs["reply_markup"]
+    assert len(keyboard.inline_keyboard) == 5
     state.set_state.assert_not_awaited()
 
 
@@ -231,6 +233,8 @@ async def test_reminder_time_invalid_warns_on_prompt() -> None:
         assert edited.kwargs["message_id"] == 43
         assert edited.args[0].startswith("⚠️")
         assert "Шаг 2 из 2" in edited.args[0]
+        keyboard = edited.kwargs["reply_markup"]
+        assert len(keyboard.inline_keyboard) == 3
         assert await UserSettingRepository(session).list_by_user(123) == []
         state.clear.assert_not_awaited()
 

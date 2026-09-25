@@ -211,7 +211,13 @@ async def birthday_date_handler(message: Message, state: FSMContext) -> None:
     if parsed is None:
         data = await state.get_data()
         fullname = str(data.get("fullname", "именинника"))
-        await warn_invalid_input(message, state, DATE_PROMPT_KEY, step2_text(fullname))
+        await warn_invalid_input(
+            message,
+            state,
+            DATE_PROMPT_KEY,
+            step2_text(fullname),
+            build_cancel_keyboard(),
+        )
         return
     day, month, year = parsed
     await state.update_data(day=day, month=month, year=year)

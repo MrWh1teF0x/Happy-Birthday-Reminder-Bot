@@ -5,7 +5,7 @@ from contextlib import suppress
 from aiogram import Bot
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.fsm.context import FSMContext
-from aiogram.types import Message
+from aiogram.types import InlineKeyboardMarkup, Message
 
 INVALID_VALUES_WARNING = "⚠️ Введены некорректные значения."
 
@@ -27,11 +27,16 @@ async def cleanup_step(message: Message, state: FSMContext, key: str) -> None:
 
 
 async def warn_invalid_input(
-    message: Message, state: FSMContext, key: str, original_text: str
+    message: Message,
+    state: FSMContext,
+    key: str,
+    original_text: str,
+    reply_markup: InlineKeyboardMarkup | None = None,
 ) -> None:
     """Удаляет ввод пользователя и дописывает предупреждение в начало промпта.
 
-    Текст промпта и его кнопки остаются нетронутыми.
+    Текст промпта сохраняется, клавиатура явно переприкрепляется,
+    чтобы кнопки гарантированно остались.
     """
     with suppress(TelegramBadRequest):
         await message.delete()
@@ -48,4 +53,5 @@ async def warn_invalid_input(
             chat_id=message.chat.id,
             message_id=prompt_id,
             parse_mode="Markdown",
+            reply_markup=reply_markup,
         )

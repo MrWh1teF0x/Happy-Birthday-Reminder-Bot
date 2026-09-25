@@ -189,6 +189,8 @@ async def test_birthday_date_invalid_warns_on_prompt() -> None:
         assert edited.args[0].startswith("⚠️")
         assert "Шаг 2 из 3" in edited.args[0]
         assert "Иван" in edited.args[0]
+        keyboard = edited.kwargs["reply_markup"]
+        assert keyboard.inline_keyboard[0][0].text == "❌ Отмена"
         assert await PersonRepository(session).list_by_owner(123) == []
         state.set_state.assert_not_awaited()
 

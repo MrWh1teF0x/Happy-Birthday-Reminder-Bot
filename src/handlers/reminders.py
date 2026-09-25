@@ -315,7 +315,7 @@ async def reminder_days_button_handler(callback: CallbackQuery, state: FSMContex
 async def reminder_days_handler(message: Message, state: FSMContext) -> None:
     days = parse_days(message.text or "")
     if days is None:
-        await warn_invalid_input(message, state, DAYS_PROMPT_KEY, STEP1_TEXT)
+        await warn_invalid_input(message, state, DAYS_PROMPT_KEY, STEP1_TEXT, build_days_keyboard())
         return
     await state.update_data(days=days)
     await state.set_state(AddReminderSG.waiting_for_time)
@@ -365,7 +365,7 @@ async def reminder_time_handler(message: Message, db: AsyncSession, state: FSMCo
         return
     moment = parse_time(message.text or "")
     if moment is None:
-        await warn_invalid_input(message, state, TIME_PROMPT_KEY, STEP2_TEXT)
+        await warn_invalid_input(message, state, TIME_PROMPT_KEY, STEP2_TEXT, build_time_keyboard())
         return
     await cleanup_step(message, state, TIME_PROMPT_KEY)
     await finish_add_reminder(db, state, message.from_user.id, moment, message)

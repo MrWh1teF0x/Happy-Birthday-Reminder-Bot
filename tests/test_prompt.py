@@ -21,15 +21,20 @@ def make_state(data: dict[str, object] | None = None) -> AsyncMock:
 
 
 async def test_warn_prepends_warning_keeping_prompt() -> None:
+    from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+
     message = make_message("билеберда")
     state = make_state({"key": 42})
+    keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[[InlineKeyboardButton(text="❌ Отмена", callback_data="x")]]
+    )
 
-    await warn_invalid_input(message, state, "key", "Оригинальный текст")
+    await warn_invalid_input(message, state, "key", "Оригинальный текст", keyboard)
 
     message.delete.assert_awaited_once()
     edited = message.bot.edit_message_text.await_args
-    assert edited.kwargs["message_id"] == 42
     assert edited.args[0] == f"{INVALID_VALUES_WARNING}\n\nОригинальный текст"
+    assert edited.kwargs["reply_markup"] is keyboard
 
 
 async def test_warn_without_prompt_sends_plain_warning() -> None:
