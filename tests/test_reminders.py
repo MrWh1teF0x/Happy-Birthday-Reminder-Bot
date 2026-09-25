@@ -283,11 +283,11 @@ async def test_reminders_list_card_page() -> None:
         assert "Всего: 1, UTC+3" in text
         assert "1️⃣" in text
         assert "За 7 дней" in text
-        assert "09:00" in text
+        assert "отправка в 09:00" in text
         keyboard = message.answer.await_args.kwargs["reply_markup"]
         assert len(keyboard.inline_keyboard) == 1
         row = keyboard.inline_keyboard[0]
-        assert row[0].text == "⏰ Изменить время"
+        assert row[0].text == "⏰ Изменить время (7 дн)"
         assert row[1].text == "🗑 Удалить"
 
 
@@ -312,6 +312,24 @@ async def test_reminders_pagination() -> None:
         rows = callback.message.edit_text.await_args.kwargs["reply_markup"].inline_keyboard
         assert len(rows) == 2
         assert [button.text for button in rows[-1]] == ["⬅️ Назад", "2 / 2"]
+
+
+async def test_reminders_sorted_chronologically() -> None:
+    async for session in make_session():
+        await UserRepository(session).get_or_create(123)
+        for days in (1, 7, 0, 3):
+            await UserSettingRepository(session).create(123, notify_days_before=days)
+        message = make_message("/reminders_list")
+
+        await reminders_list_handler(message, session, AsyncMock())
+
+        text = message.answer.await_args.args[0]
+        assert (
+            text.index("За 7 дней")
+            < text.index("За 3 дня")
+            < text.index("За 1 день")
+            < text.index("В день праздника")
+        )
 
 
 async def test_edit_reminder_hint_points_to_list() -> None:

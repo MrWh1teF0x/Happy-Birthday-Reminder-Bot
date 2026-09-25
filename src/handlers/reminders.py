@@ -139,7 +139,7 @@ def format_days_full(days: int) -> str:
 def build_reminder_card(setting: UserSetting, index: int) -> str:
     days = format_days_full(setting.notify_days_before)
     time = setting.notification_time.strftime("%H:%M")
-    return f"{keycap_number(index)} **{days}** — отправка в **{time}**"
+    return f"{keycap_number(index)} **{days}** — отправка в {time}"
 
 
 def build_reminders_page_text(settings: list[UserSetting], page: int, utc: str) -> str:
@@ -158,7 +158,8 @@ def build_reminders_page_keyboard(
     rows: list[list[InlineKeyboardButton]] = [
         [
             InlineKeyboardButton(
-                text="⏰ Изменить время", callback_data=f"{EDIT_REM_PREFIX}{setting.id}"
+                text=f"⏰ Изменить время ({setting.notify_days_before} дн)",
+                callback_data=f"{EDIT_REM_PREFIX}{setting.id}",
             ),
             InlineKeyboardButton(text="🗑 Удалить", callback_data=f"{DEL_REM_PREFIX}{setting.id}"),
         ]

@@ -1,6 +1,4 @@
 from collections.abc import AsyncIterator
-from datetime import datetime
-from datetime import timezone as tz_utc
 from unittest.mock import AsyncMock, MagicMock
 
 from sqlalchemy.ext.asyncio import (
@@ -325,14 +323,13 @@ async def test_birthdays_list_card_page() -> None:
 
         text = message.answer.await_args.args[0]
         assert "Список дней рождения" in text
-        assert "Всего: 1" in text
+        assert "Страница 1 из 1" in text
         assert "1. Иван" in text
         assert "12 мая" in text
-        assert "Исполнится" in text
         keyboard = message.answer.await_args.kwargs["reply_markup"]
         assert len(keyboard.inline_keyboard) == 1
         row = keyboard.inline_keyboard[0]
-        assert row[0].text == "✏️ Изменить"
+        assert row[0].text == "✏️ Изменить Иван"
         assert row[1].text == "🗑 Удалить"
 
 
@@ -361,19 +358,29 @@ async def test_birthdays_pagination() -> None:
         assert [button.text for button in nav] == ["⬅️ Назад", "2 / 2"]
 
 
-async def test_birthdays_soon_label() -> None:
-    from datetime import timedelta
+async def test_birthday_card_age_format() -> None:
+    import re
 
     async for session in make_session():
-        soon = datetime.now(tz_utc.utc).date() + timedelta(days=3)
-        await PersonRepository(session).create(
-            123, fullname="Скоро", birth_day=soon.day, birth_month=soon.month
-        )
+        await seed_person(session)
         message = make_message("/birthdays_list")
 
         await birthdays_list_handler(message, session, AsyncMock())
 
-        assert "(через 3 дня)" in message.answer.await_args.args[0]
+        text = message.answer.await_args.args[0]
+        assert re.search(r"\(\d+ (год|года|лет)\)", text) is not None
+
+
+async def test_birthday_card_without_year_has_no_age() -> None:
+    async for session in make_session():
+        await PersonRepository(session).create(123, fullname="Анна", birth_day=1, birth_month=3)
+        message = make_message("/birthdays_list")
+
+        await birthdays_list_handler(message, session, AsyncMock())
+
+        text = message.answer.await_args.args[0]
+        assert "1 марта" in text
+        assert text.count("(") == 1  # только шапка со страницей
 
 
 async def test_edit_birthday_hint_points_to_list() -> None:

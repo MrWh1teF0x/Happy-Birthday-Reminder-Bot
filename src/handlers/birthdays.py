@@ -22,7 +22,6 @@ from src.database.models import Person
 from src.handlers.birthday_saver import BirthdayDraft, DbBirthdaySaver
 from src.handlers.pagination import (
     build_pagination_keyboard,
-    days_until,
     page_slice,
     paginate,
     plural,
@@ -303,7 +302,6 @@ FIELD_DATE = "date"
 FIELD_USERNAME = "username"
 FIELD_NOTES = "notes"
 BDAY_PAGE_KEY = "bday_page"
-SOON_DAYS_LIMIT = 30
 
 FIELD_LABELS: dict[str, str] = {
     FIELD_FULLNAME: "Имя",
@@ -325,7 +323,10 @@ def build_birthdays_page_keyboard(
 ) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = [
         [
-            InlineKeyboardButton(text="✏️ Изменить", callback_data=f"{EDIT_BDAY_PREFIX}{person.id}"),
+            InlineKeyboardButton(
+                text=f"✏️ Изменить {card_button_name(person.fullname)}",
+                callback_data=f"{EDIT_BDAY_PREFIX}{person.id}",
+            ),
             InlineKeyboardButton(text="🗑 Удалить", callback_data=f"{DEL_BDAY_PREFIX}{person.id}"),
         ]
         for person in persons[page_slice(page)]
@@ -370,22 +371,23 @@ def build_birthday_card(person: Person, index: int, today: date) -> str:
     emoji = "🎈" if index % 2 == 1 else "🍰"
     date_text = f"{person.birth_day} {MONTHS_GENITIVE[person.birth_month - 1]}"
     head = f"{emoji} **{index}. {person.fullname}** — **{date_text}**"
-    until = days_until(person.birth_day, person.birth_month, today)
-    if until <= SOON_DAYS_LIMIT:
-        head += f" *(через {until} {plural(until, 'день', 'дня', 'дней')})*"
-    details: list[str] = []
     age = turning_age(person.birth_day, person.birth_month, person.birth_year, today)
     if age is not None:
-        details.append(f"🎂 Исполнится: {age} {plural(age, 'год', 'года', 'лет')}")
+        head += f" *({age} {plural(age, 'год', 'года', 'лет')})*"
+    lines = [head]
     if person.notes:
-        details.append(f"🎁 *«{person.notes}»*")
-    if details:
-        return head + "\n" + " | ".join(details)
-    return head
+        lines.append(f"🎁 *«{person.notes}»*")
+    return "\n".join(lines)
 
 
-def build_birthdays_page_text(persons: list[Person], page: int, today: date) -> str:
-    header = f"📋 **Список дней рождения** *(Всего: {len(persons)})*"
+def card_button_name(fullname: str) -> str:
+    return fullname.split()[0] if fullname.split() else fullname
+
+
+def build_birthdays_page_text(
+    persons: list[Person], page: int, today: date, total_pages: int
+) -> str:
+    header = f"📋 **Список дней рождения** *(Страница {page} из {total_pages})*"
     offset = (page - 1) * 5
     cards = [
         build_birthday_card(person, offset + i + 1, today)
@@ -414,7 +416,7 @@ async def answer_birthdays_page(
     await state.update_data(bday_page=page)
     today = user_today(user.time_zone if user else None)
     await message.answer(
-        build_birthdays_page_text(persons, page, today),
+        build_birthdays_page_text(persons, page, today, total_pages),
         reply_markup=build_birthdays_page_keyboard(persons, page, total_pages),
         parse_mode="Markdown",
     )
@@ -432,7 +434,7 @@ async def edit_birthdays_page(
     await state.update_data(bday_page=page)
     today = user_today(user.time_zone if user else None)
     await message.edit_text(
-        build_birthdays_page_text(persons, page, today),
+        build_birthdays_page_text(persons, page, today, total_pages),
         reply_markup=build_birthdays_page_keyboard(persons, page, total_pages),
         parse_mode="Markdown",
     )

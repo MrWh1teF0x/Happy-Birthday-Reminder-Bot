@@ -109,7 +109,11 @@ class UserSettingRepository:
         self._session = session
 
     async def list_by_user(self, tg_id: int) -> list[UserSetting]:
-        result = await self._session.execute(select(UserSetting).where(UserSetting.tg_id == tg_id))
+        result = await self._session.execute(
+            select(UserSetting)
+            .where(UserSetting.tg_id == tg_id)
+            .order_by(UserSetting.notify_days_before.desc())
+        )
         return list(result.scalars().all())
 
     async def get(self, setting_id: int) -> UserSetting | None:
