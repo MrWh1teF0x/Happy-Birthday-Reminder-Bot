@@ -69,6 +69,7 @@ async def test_start_handler_greets_user_by_name() -> None:
         assert any("Тест" in text for text in texts)
         assert any("главный по праздникам" in text for text in texts)
         assert any("Давай настроим бота под тебя" in text for text in texts)
+        assert any("/help" in text for text in texts)
 
 
 async def test_start_handler_creates_user_and_asks_timezone() -> None:
@@ -201,6 +202,7 @@ async def test_repeated_start_shows_about_only() -> None:
         assert message.answer.await_count == 1
         text = message.answer.await_args.args[0]
         assert "днях рождения" in text
+        assert "/help" in text
 
 
 async def test_repeated_start_shows_help_once_for_grandfathered() -> None:
