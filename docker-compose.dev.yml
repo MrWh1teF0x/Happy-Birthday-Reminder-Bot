@@ -1,0 +1,9 @@
+# Dev-override: исходники монтируются в контейнер, бот перезапускается сам.
+# Запуск: docker compose -f docker-compose.yml -f docker-compose.dev.yml up --build
+services:
+  bot:
+    volumes:
+      - ./src:/app/src
+    environment:
+      PYTHONDONTWRITEBYTECODE: "1"
+    command: ["uv", "run", "--no-sync", "dev"]

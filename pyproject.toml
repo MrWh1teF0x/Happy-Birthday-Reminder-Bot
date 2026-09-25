@@ -31,6 +31,7 @@ dependencies = [
     "python-dateutil>=2.8",
     "alembic>=1.20.0",
     "emoji>=2.16.0",
+    "watchfiles>=1.3.0",
 ]
 
 [project.optional-dependencies]
@@ -45,6 +46,7 @@ dev = [
 [project.scripts]
 bot = "src.main:run"
 run = "src.main:run"
+dev = "src.dev.watch:dev"
 test = "src.dev.tasks:test"
 lint = "src.dev.tasks:lint"
 fmt = "src.dev.tasks:fmt"
