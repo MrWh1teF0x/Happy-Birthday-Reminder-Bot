@@ -201,7 +201,7 @@ async def test_repeated_start_shows_about_only() -> None:
         state.set_state.assert_not_awaited()
         assert message.answer.await_count == 1
         text = message.answer.await_args.args[0]
-        assert "днях рождения" in text
+        assert "Чем я могу помочь" in text
         assert "/help" in text
 
 
