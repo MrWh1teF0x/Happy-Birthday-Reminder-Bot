@@ -368,11 +368,38 @@ async def test_time_edit_rejects_bad_time() -> None:
     async for session in make_session():
         await UserRepository(session).get_or_create(123)
         setting_id = await seed_setting(session)
-        state = make_state({"setting_id": setting_id, "field": "time"})
+        state = make_state({"setting_id": setting_id, "field": "time", "time_edit_prompt_id": 44})
+        message = make_message("утром")
 
-        await reminder_value_handler(make_message("утром"), session, state)
+        await reminder_value_handler(message, session, state)
 
+        message.delete.assert_awaited_once()
+        message.answer.assert_not_awaited()
+        edited = message.bot.edit_message_text.await_args
+        assert edited.kwargs["message_id"] == 44
+        assert edited.args[0].startswith("⚠️ Время введено некорректно")
+        assert "Текущее время" in edited.args[0]
+        keyboard = edited.kwargs["reply_markup"]
+        assert keyboard.inline_keyboard[0][0].text == "❌ Отмена"
         state.clear.assert_not_awaited()
+        setting = await UserSettingRepository(session).get(setting_id)
+        assert setting is not None
+        assert setting.notification_time.strftime("%H:%M") == "09:00"
+
+
+async def test_time_edit_cancel_returns_to_list() -> None:
+    from src.handlers.reminders import EDIT_REM_CANCEL, reminder_time_edit_cancel_handler
+
+    async for session in make_session():
+        await UserRepository(session).get_or_create(123)
+        await seed_setting(session)
+        state = make_state({"setting_id": 1, "field": "time"})
+        callback = make_callback(EDIT_REM_CANCEL)
+
+        await reminder_time_edit_cancel_handler(callback, session, state)
+
+        state.clear.assert_awaited_once()
+        assert "Список напоминаний" in callback.message.edit_text.await_args.args[0]
 
 
 async def test_time_edit_rejects_foreign_setting() -> None:

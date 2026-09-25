@@ -8,6 +8,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import InlineKeyboardMarkup, Message
 
 INVALID_VALUES_WARNING = "⚠️ Введены некорректные значения."
+INVALID_TIME_WARNING = "⚠️ Время введено некорректно."
 
 
 async def delete_step_message(bot: Bot, chat_id: int, state: FSMContext, key: str) -> None:
@@ -32,6 +33,7 @@ async def warn_invalid_input(
     key: str,
     original_text: str,
     reply_markup: InlineKeyboardMarkup | None = None,
+    warning: str = INVALID_VALUES_WARNING,
 ) -> None:
     """Удаляет ввод пользователя и дописывает предупреждение в начало промпта.
 
@@ -45,11 +47,11 @@ async def warn_invalid_input(
     data = await state.get_data()
     prompt_id = data.get(key)
     if not isinstance(prompt_id, int):
-        await message.answer(INVALID_VALUES_WARNING)
+        await message.answer(warning)
         return
     with suppress(TelegramBadRequest):
         await message.bot.edit_message_text(
-            f"{INVALID_VALUES_WARNING}\n\n{original_text}",
+            f"{warning}\n\n{original_text}",
             chat_id=message.chat.id,
             message_id=prompt_id,
             parse_mode="Markdown",

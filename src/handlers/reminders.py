@@ -26,7 +26,11 @@ from src.handlers.pagination import (
     paginate,
     plural,
 )
-from src.handlers.prompt import cleanup_step, warn_invalid_input
+from src.handlers.prompt import (
+    INVALID_TIME_WARNING,
+    cleanup_step,
+    warn_invalid_input,
+)
 from src.handlers.reminder_saver import DbReminderSaver
 from src.handlers.states import AddReminderSG, EditReminderStates
 
@@ -40,6 +44,8 @@ CANCEL_DEL_REM = "cancel_del_rem"
 FIELD_DAYS = "days"
 FIELD_TIME = "time"
 REM_PAGE_KEY = "rem_page"
+TIME_EDIT_PROMPT_KEY = "time_edit_prompt_id"
+EDIT_REM_CANCEL = "edit_rem:cancel"
 
 ADD_PREFIX = "rem_add:"
 ADD_DAYS_PREFIX = "rem_add:days:"
@@ -78,11 +84,6 @@ STEP2_TEXT = (
 
 DAYS_PROMPT_KEY = "days_prompt_id"
 TIME_PROMPT_KEY = "time_prompt_id"
-
-FIELD_LABELS: dict[str, str] = {
-    FIELD_DAYS: "За сколько дней",
-    FIELD_TIME: "Во сколько",
-}
 
 EMPTY_REM_TEXT = "🔔 У вас нет настроенных напоминаний."
 
@@ -468,6 +469,30 @@ async def edit_reminder_hint_handler(message: Message) -> None:
     )
 
 
+def build_time_edit_text(setting: UserSetting) -> str:
+    current = setting.notification_time.strftime("%H:%M")
+    return (
+        f"⏰ Текущее время: **{current}**.\n\nПришли новое время в формате ЧЧ:ММ — например, 09:00."
+    )
+
+
+def build_time_edit_cancel_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[[InlineKeyboardButton(text="❌ Отмена", callback_data=EDIT_REM_CANCEL)]]
+    )
+
+
+@router.callback_query(F.data == EDIT_REM_CANCEL)
+async def reminder_time_edit_cancel_handler(
+    callback: CallbackQuery, db: AsyncSession, state: FSMContext
+) -> None:
+    await state.clear()
+    await callback.answer()
+    if isinstance(callback.message, Message):
+        page = await get_rem_page(state)
+        await edit_reminders_page(callback.message, db, callback.from_user.id, page, state)
+
+
 @router.callback_query(F.data.startswith(EDIT_REM_PREFIX))
 async def reminder_time_edit_button_handler(
     callback: CallbackQuery, db: AsyncSession, state: FSMContext
@@ -486,12 +511,11 @@ async def reminder_time_edit_button_handler(
     await state.set_state(EditReminderStates.waiting_for_value)
     await state.update_data(setting_id=setting_id, field=FIELD_TIME)
     await callback.answer()
-    current = setting.notification_time.strftime("%H:%M")
     await callback.message.edit_text(
-        f"⏰ Текущее время: **{current}**.\n\n"
-        "Пришли новое время в формате ЧЧ:ММ — например, 09:00.",
+        build_time_edit_text(setting),
         parse_mode="Markdown",
     )
+    await state.update_data(time_edit_prompt_id=callback.message.message_id)
 
 
 @router.message(EditReminderStates.waiting_for_value, F.text)
@@ -515,7 +539,14 @@ async def reminder_value_handler(message: Message, db: AsyncSession, state: FSMC
     elif field == FIELD_TIME:
         moment = parse_time(value)
         if moment is None:
-            await message.answer("Не понял время. Формат ЧЧ:ММ — например, 09:00.")
+            await warn_invalid_input(
+                message,
+                state,
+                TIME_EDIT_PROMPT_KEY,
+                build_time_edit_text(setting),
+                build_time_edit_cancel_keyboard(),
+                INVALID_TIME_WARNING,
+            )
             return
         updates = {"notification_time": moment}
     else:
