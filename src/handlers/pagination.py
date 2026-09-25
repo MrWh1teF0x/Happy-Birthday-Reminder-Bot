@@ -28,19 +28,23 @@ def page_slice(page: int, per_page: int = PAGE_SIZE) -> slice:
 
 
 def build_pagination_keyboard(
-    prefix: str, page: int, total_pages: int
+    prefix: str, page: int, total_pages: int, *, numbered_nav: bool = False
 ) -> InlineKeyboardMarkup | None:
-    """Блок навигации. Одна страница — кнопок нет (None)."""
+    """Блок навигации. Одна страница — кнопок нет (None).
+
+    numbered_nav: кнопки «Стр. X» и некликабельный счётчик (callback noop).
+    """
     if total_pages <= 1:
         return None
+    back_text = f"⬅️ Стр. {page - 1}" if numbered_nav else "⬅️ Назад"
+    fwd_text = f"Стр. {page + 1} ➡️" if numbered_nav else "Вперед ➡️"
     row: list[InlineKeyboardButton] = []
     if page > 1:
-        row.append(InlineKeyboardButton(text="⬅️ Назад", callback_data=f"{prefix}:{page - 1}"))
-    row.append(
-        InlineKeyboardButton(text=f"{page} / {total_pages}", callback_data=f"{prefix}:{page}")
-    )
+        row.append(InlineKeyboardButton(text=back_text, callback_data=f"{prefix}:{page - 1}"))
+    counter_callback = "noop" if numbered_nav else f"{prefix}:{page}"
+    row.append(InlineKeyboardButton(text=f"{page} / {total_pages}", callback_data=counter_callback))
     if page < total_pages:
-        row.append(InlineKeyboardButton(text="Вперед ➡️", callback_data=f"{prefix}:{page + 1}"))
+        row.append(InlineKeyboardButton(text=fwd_text, callback_data=f"{prefix}:{page + 1}"))
     return InlineKeyboardMarkup(inline_keyboard=[row])
 
 

@@ -22,6 +22,7 @@ from src.database.models import Person
 from src.handlers.birthday_saver import BirthdayDraft, DbBirthdaySaver
 from src.handlers.pagination import (
     build_pagination_keyboard,
+    days_until,
     page_slice,
     paginate,
     plural,
@@ -318,23 +319,35 @@ def format_birthday(person: Person) -> str:
     return f"{person.fullname} — {date}"
 
 
+def card_button_name(fullname: str) -> str:
+    return fullname.split()[0] if fullname.split() else fullname
+
+
 def build_birthdays_page_keyboard(
     persons: list[Person], page: int, total_pages: int
 ) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = [
         [
             InlineKeyboardButton(
-                text=f"✏️ Изменить {card_button_name(person.fullname)}",
+                text=f"✏️ {card_button_name(person.fullname)}",
                 callback_data=f"{EDIT_BDAY_PREFIX}{person.id}",
             ),
-            InlineKeyboardButton(text="🗑 Удалить", callback_data=f"{DEL_BDAY_PREFIX}{person.id}"),
+            InlineKeyboardButton(
+                text=f"🗑 {card_button_name(person.fullname)}",
+                callback_data=f"{DEL_BDAY_PREFIX}{person.id}",
+            ),
         ]
         for person in persons[page_slice(page)]
     ]
-    nav = build_pagination_keyboard(BDAY_PAGE_PREFIX, page, total_pages)
+    nav = build_pagination_keyboard(BDAY_PAGE_PREFIX, page, total_pages, numbered_nav=True)
     if nav is not None:
         rows.extend(nav.inline_keyboard)
     return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+@router.callback_query(F.data == "noop")
+async def noop_handler(callback: CallbackQuery) -> None:
+    await callback.answer()
 
 
 def build_fields_keyboard(person_id: int) -> InlineKeyboardMarkup:
@@ -368,32 +381,40 @@ def user_today(tz_name: str | None) -> date:
 
 
 def build_birthday_card(person: Person, index: int, today: date) -> str:
-    emoji = "🎈" if index % 2 == 1 else "🍰"
     date_text = f"{person.birth_day} {MONTHS_GENITIVE[person.birth_month - 1]}"
-    head = f"{emoji} **{index}. {person.fullname}** — **{date_text}**"
+    until = days_until(person.birth_day, person.birth_month, today)
     age = turning_age(person.birth_day, person.birth_month, person.birth_year, today)
-    if age is not None:
-        head += f" *({age} {plural(age, 'год', 'года', 'лет')})*"
+    if until == 0:
+        head = f"🎉 **{index}. {person.fullname}** — **{date_text}** *(СЕГОДНЯ!)*"
+        age_verb = "Исполнилось"
+    else:
+        head = (
+            f"🎈 **{index}. {person.fullname}** — **{date_text}** "
+            f"*(через {until} {plural(until, 'день', 'дня', 'дней')})*"
+        )
+        age_verb = "Исполнится"
     lines = [head]
+    if age is not None:
+        lines.append(f"🎂 {age_verb}: {age} {plural(age, 'год', 'года', 'лет')}")
     if person.notes:
         lines.append(f"🎁 *«{person.notes}»*")
     return "\n".join(lines)
 
 
-def card_button_name(fullname: str) -> str:
-    return fullname.split()[0] if fullname.split() else fullname
+def sort_by_upcoming(persons: list[Person], today: date) -> list[Person]:
+    return sorted(
+        persons, key=lambda person: days_until(person.birth_day, person.birth_month, today)
+    )
 
 
-def build_birthdays_page_text(
-    persons: list[Person], page: int, today: date, total_pages: int
-) -> str:
-    header = f"📋 **Список дней рождения** *(Страница {page} из {total_pages})*"
+def build_birthdays_page_text(persons: list[Person], page: int, today: date) -> str:
+    header = f"📋 **Список дней рождения (всего: {len(persons)})**"
     offset = (page - 1) * 5
     cards = [
         build_birthday_card(person, offset + i + 1, today)
         for i, person in enumerate(persons[page_slice(page)])
     ]
-    return header + "\n\n" + "\n\n".join(cards)
+    return header + "\n\n" + "\n───\n".join(cards) + "\n\n👇 *Кнопки управления:*"
 
 
 async def get_bday_page(state: FSMContext) -> int:
@@ -415,8 +436,9 @@ async def answer_birthdays_page(
     page, total_pages = paginate(len(persons), page)
     await state.update_data(bday_page=page)
     today = user_today(user.time_zone if user else None)
+    persons = sort_by_upcoming(persons, today)
     await message.answer(
-        build_birthdays_page_text(persons, page, today, total_pages),
+        build_birthdays_page_text(persons, page, today),
         reply_markup=build_birthdays_page_keyboard(persons, page, total_pages),
         parse_mode="Markdown",
     )
@@ -433,8 +455,9 @@ async def edit_birthdays_page(
     page, total_pages = paginate(len(persons), page)
     await state.update_data(bday_page=page)
     today = user_today(user.time_zone if user else None)
+    persons = sort_by_upcoming(persons, today)
     await message.edit_text(
-        build_birthdays_page_text(persons, page, today, total_pages),
+        build_birthdays_page_text(persons, page, today),
         reply_markup=build_birthdays_page_keyboard(persons, page, total_pages),
         parse_mode="Markdown",
     )

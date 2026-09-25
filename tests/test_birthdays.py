@@ -322,15 +322,17 @@ async def test_birthdays_list_card_page() -> None:
         await birthdays_list_handler(message, session, AsyncMock())
 
         text = message.answer.await_args.args[0]
-        assert "Список дней рождения" in text
-        assert "Страница 1 из 1" in text
+        assert "Список дней рождения (всего: 1)" in text
         assert "1. Иван" in text
         assert "12 мая" in text
+        assert "Исполнится" in text
+        assert "───" not in text  # разделитель только между карточками
+        assert "Кнопки управления" in text
         keyboard = message.answer.await_args.kwargs["reply_markup"]
         assert len(keyboard.inline_keyboard) == 1
         row = keyboard.inline_keyboard[0]
-        assert row[0].text == "✏️ Изменить Иван"
-        assert row[1].text == "🗑 Удалить"
+        assert row[0].text == "✏️ Иван"
+        assert row[1].text == "🗑 Иван"
 
 
 async def test_birthdays_pagination() -> None:
@@ -347,7 +349,7 @@ async def test_birthdays_pagination() -> None:
         keyboard = message.answer.await_args.kwargs["reply_markup"]
         assert len(keyboard.inline_keyboard) == 6  # 5 карточек + навигация
         nav = keyboard.inline_keyboard[5]
-        assert [button.text for button in nav] == ["1 / 2", "Вперед ➡️"]
+        assert [button.text for button in nav] == ["1 / 2", "Стр. 2 ➡️"]
 
         callback = make_callback("bday_page:2")
         await birthdays_page_handler(callback, session, state)
@@ -355,7 +357,9 @@ async def test_birthdays_pagination() -> None:
         rows = callback.message.edit_text.await_args.kwargs["reply_markup"].inline_keyboard
         assert len(rows) == 2
         nav = rows[-1]
-        assert [button.text for button in nav] == ["⬅️ Назад", "2 / 2"]
+        assert [button.text for button in nav] == ["⬅️ Стр. 1", "2 / 2"]
+        counter = nav[1]
+        assert counter.callback_data == "noop"
 
 
 async def test_birthday_card_age_format() -> None:
@@ -368,7 +372,53 @@ async def test_birthday_card_age_format() -> None:
         await birthdays_list_handler(message, session, AsyncMock())
 
         text = message.answer.await_args.args[0]
-        assert re.search(r"\(\d+ (год|года|лет)\)", text) is not None
+        assert re.search(r"Исполнится: \d+ (год|года|лет)", text) is not None
+        assert re.search(r"\(через \d+ (день|дня|дней)\)", text) is not None
+
+
+async def test_birthday_today_card() -> None:
+    from datetime import datetime
+    from datetime import timezone as tz_utc
+
+    async for session in make_session():
+        today = datetime.now(tz_utc.utc).date()
+        await PersonRepository(session).create(
+            123,
+            fullname="Мама",
+            birth_day=today.day,
+            birth_month=today.month,
+            birth_year=today.year - 42,
+        )
+        message = make_message("/birthdays_list")
+
+        await birthdays_list_handler(message, session, AsyncMock())
+
+        text = message.answer.await_args.args[0]
+        assert "🎉" in text
+        assert "(СЕГОДНЯ!)" in text
+        assert "Исполнилось: 42 года" in text
+
+
+async def test_birthdays_sorted_by_upcoming() -> None:
+    from datetime import datetime, timedelta
+    from datetime import timezone as tz_utc
+
+    async for session in make_session():
+        today = datetime.now(tz_utc.utc).date()
+        far = today + timedelta(days=200)
+        near = today + timedelta(days=10)
+        await PersonRepository(session).create(
+            123, fullname="Далёкий", birth_day=far.day, birth_month=far.month
+        )
+        await PersonRepository(session).create(
+            123, fullname="Близкий", birth_day=near.day, birth_month=near.month
+        )
+        message = make_message("/birthdays_list")
+
+        await birthdays_list_handler(message, session, AsyncMock())
+
+        text = message.answer.await_args.args[0]
+        assert text.index("Близкий") < text.index("Далёкий")
 
 
 async def test_birthday_card_without_year_has_no_age() -> None:
@@ -380,7 +430,8 @@ async def test_birthday_card_without_year_has_no_age() -> None:
 
         text = message.answer.await_args.args[0]
         assert "1 марта" in text
-        assert text.count("(") == 1  # только шапка со страницей
+        assert "через" in text
+        assert "Исполн" not in text
 
 
 async def test_edit_birthday_hint_points_to_list() -> None:
