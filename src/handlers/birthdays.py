@@ -1,9 +1,11 @@
 """Дни рождения: пошаговое добавление (AddBirthdaySG), список, редактирование."""
 
 import re
+from contextlib import suppress
 from datetime import datetime
 
-from aiogram import F, Router
+from aiogram import Bot, F, Router
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.types import (
@@ -60,6 +62,17 @@ STEP3_TEXT = (
 DATE_ERROR_TEXT = (
     "⚠️ Некорректный формат даты. Попробуйте еще раз (например: `12.09` или `12.09.1995`)."
 )
+
+DATE_PROMPT_KEY = "date_prompt_id"
+
+
+async def delete_step_message(bot: Bot, chat_id: int, state: FSMContext, key: str) -> None:
+    data = await state.get_data()
+    prompt_id = data.get(key)
+    if isinstance(prompt_id, int):
+        with suppress(TelegramBadRequest):
+            await bot.delete_message(chat_id, prompt_id)
+
 
 CANCELLED_TEXT = "❌ Добавление отменено."
 
@@ -203,16 +216,22 @@ async def birthday_name_handler(message: Message, state: FSMContext) -> None:
         return
     await state.update_data(fullname=fullname)
     await state.set_state(AddBirthdaySG.waiting_for_date)
-    await message.answer(
+    sent = await message.answer(
         step2_text(fullname), reply_markup=build_cancel_keyboard(), parse_mode="Markdown"
     )
+    await state.update_data(date_prompt_id=sent.message_id)
 
 
 @router.message(AddBirthdaySG.waiting_for_date, F.text)
 async def birthday_date_handler(message: Message, state: FSMContext) -> None:
     parsed = parse_birthday_date(message.text or "")
     if parsed is None:
-        await message.answer(DATE_ERROR_TEXT, parse_mode="Markdown")
+        if message.bot is not None:
+            await delete_step_message(message.bot, message.chat.id, state, DATE_PROMPT_KEY)
+            with suppress(TelegramBadRequest):
+                await message.delete()
+        error = await message.answer(DATE_ERROR_TEXT, parse_mode="Markdown")
+        await state.update_data(date_prompt_id=error.message_id)
         return
     day, month, year = parsed
     await state.update_data(day=day, month=month, year=year)

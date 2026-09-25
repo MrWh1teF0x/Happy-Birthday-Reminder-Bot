@@ -58,7 +58,10 @@ async def make_session() -> AsyncIterator[AsyncSession]:
 def make_message(text: str) -> MagicMock:
     message = MagicMock()
     message.answer = AsyncMock()
+    message.delete = AsyncMock()
     message.text = text
+    message.chat.id = 123
+    message.bot.delete_message = AsyncMock()
     message.from_user.id = 123
     message.from_user.username = "owner"
     return message
@@ -166,16 +169,32 @@ async def test_birthday_date_without_year() -> None:
         state.set_state.assert_awaited_once_with(AddBirthdaySG.waiting_for_note)
 
 
-async def test_birthday_date_invalid_stays_in_state() -> None:
+async def test_birthday_date_invalid_deletes_messages() -> None:
     async for session in make_session():
-        state = make_state({"fullname": "Иван"})
+        state = make_state({"fullname": "Иван", "date_prompt_id": 42})
         message = make_message("31.02")
 
         await birthday_date_handler(message, state)
 
+        message.delete.assert_awaited_once()
+        message.bot.delete_message.assert_awaited_once_with(123, 42)
         assert "Некорректный формат" in message.answer.await_args.args[0]
         assert await PersonRepository(session).list_by_owner(123) == []
         state.set_state.assert_not_awaited()
+        updated_keys = [list(call.kwargs.keys()) for call in state.update_data.await_args_list]
+        assert any("date_prompt_id" in keys for keys in updated_keys)
+
+
+async def test_birthday_name_stores_date_prompt_id() -> None:
+    state = make_state()
+
+    await birthday_name_handler(make_message("Иван"), state)
+
+    updated = {}
+    for call in state.update_data.await_args_list:
+        updated.update(call.kwargs)
+    assert updated.get("fullname") == "Иван"
+    assert "date_prompt_id" in updated
 
 
 async def test_birthday_name_empty_stays_in_state() -> None:
