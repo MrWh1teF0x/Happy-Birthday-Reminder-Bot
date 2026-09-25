@@ -11,6 +11,7 @@ from aiogram.types import CallbackQuery, Message
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.database import UserRepository, UserSettingRepository
+from src.handlers.commands import render_help
 from src.handlers.keyboards import TIMEZONE_CALLBACK_PREFIX, build_timezone_keyboard
 from src.handlers.states import TimezoneStates
 
@@ -53,11 +54,10 @@ async def request_timezone(message: Message, state: FSMContext, current: str | N
     await state.update_data(tz_prompt_id=sent.message_id)
 
 
-def build_timezone_confirm_text(zone: str) -> str:
-    return (
-        f"Готово! Часовой пояс — `{zone}`. Буду присылать оповещения за 7 дней в 09:00. "
-        "Посмотреть и изменить оповещения: /reminders_list."
-    )
+def build_timezone_confirm_text(zone: str, *, is_first_choice: bool) -> str:
+    if is_first_choice:
+        return f"✅ Часовой пояс успешно выбран: `{zone}`."
+    return f"✅ Часовой пояс успешно изменён: `{zone}`."
 
 
 async def delete_timezone_prompt(bot: Bot, chat_id: int, state: FSMContext) -> None:
@@ -90,14 +90,19 @@ async def timezone_button_handler(
         await callback.answer("Неизвестный часовой пояс.", show_alert=True)
         return
     await callback.answer()
-    await save_timezone_and_seed_reminder(
+    is_first_choice = await save_timezone_and_seed_reminder(
         db, callback.from_user.id, zone, username=callback.from_user.username
     )
     await state.clear()
     if isinstance(callback.message, Message):
         with suppress(TelegramBadRequest):
             await callback.message.delete()
-        await callback.message.answer(build_timezone_confirm_text(zone), parse_mode="Markdown")
+        await callback.message.answer(
+            build_timezone_confirm_text(zone, is_first_choice=is_first_choice),
+            parse_mode="Markdown",
+        )
+        if is_first_choice:
+            await callback.message.answer(render_help())
 
 
 @router.message(TimezoneStates.waiting_for_timezone, F.text)
@@ -109,10 +114,15 @@ async def timezone_text_handler(message: Message, db: AsyncSession, state: FSMCo
             parse_mode="Markdown",
         )
         return
-    await save_timezone_and_seed_reminder(db, message.from_user.id, zone)
+    is_first_choice = await save_timezone_and_seed_reminder(db, message.from_user.id, zone)
     if message.bot is not None:
         await delete_timezone_prompt(message.bot, message.chat.id, state)
     await state.clear()
     with suppress(TelegramBadRequest):
         await message.delete()
-    await message.answer(build_timezone_confirm_text(zone), parse_mode="Markdown")
+    await message.answer(
+        build_timezone_confirm_text(zone, is_first_choice=is_first_choice),
+        parse_mode="Markdown",
+    )
+    if is_first_choice:
+        await message.answer(render_help())

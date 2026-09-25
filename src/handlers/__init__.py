@@ -1,6 +1,7 @@
 from aiogram import Router
 
 from src.handlers.birthdays import router as birthdays_router
+from src.handlers.help import router as help_router
 from src.handlers.moderation import router as moderation_router
 from src.handlers.reminders import router as reminders_router
 from src.handlers.start import router as start_router
@@ -9,6 +10,7 @@ from src.handlers.timezone import router as timezone_router
 
 router = Router(name="root")
 router.include_router(start_router)
+router.include_router(help_router)
 router.include_router(timezone_router)
 router.include_router(birthdays_router)
 router.include_router(reminders_router)

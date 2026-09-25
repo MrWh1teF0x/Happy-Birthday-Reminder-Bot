@@ -122,6 +122,51 @@ async def test_timezone_text_rejects_unknown_zone() -> None:
         state.clear.assert_not_awaited()
 
 
+async def test_first_choice_shows_confirm_and_help() -> None:
+    from aiogram.types import Message as TgMessage
+
+    async for session in make_session():
+        await UserRepository(session).get_or_create(123)
+        callback = MagicMock()
+        callback.answer = AsyncMock()
+        callback.data = "tz:Europe/Moscow"
+        callback.from_user.id = 123
+        callback.from_user.username = "owner"
+        callback.message = MagicMock(spec=TgMessage)
+        callback.message.delete = AsyncMock()
+        callback.message.answer = AsyncMock()
+        state = AsyncMock()
+
+        await timezone_button_handler(callback, session, state)
+
+        texts = [call.args[0] for call in callback.message.answer.await_args_list]
+        assert any("успешно выбран" in text for text in texts)
+        assert any("/add_birthday" in text for text in texts)
+
+
+async def test_second_choice_shows_changed_without_help() -> None:
+    from aiogram.types import Message as TgMessage
+
+    async for session in make_session():
+        await UserRepository(session).get_or_create(123)
+        await UserRepository(session).set_time_zone(123, "UTC")
+        callback = MagicMock()
+        callback.answer = AsyncMock()
+        callback.data = "tz:Europe/Moscow"
+        callback.from_user.id = 123
+        callback.from_user.username = "owner"
+        callback.message = MagicMock(spec=TgMessage)
+        callback.message.delete = AsyncMock()
+        callback.message.answer = AsyncMock()
+        state = AsyncMock()
+
+        await timezone_button_handler(callback, session, state)
+
+        texts = [call.args[0] for call in callback.message.answer.await_args_list]
+        assert any("успешно изменён" in text for text in texts)
+        assert all("/add_birthday" not in text for text in texts)
+
+
 async def test_timezone_text_accepts_iana_name() -> None:
     async for session in make_session():
         await UserRepository(session).get_or_create(123)
