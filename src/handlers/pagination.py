@@ -7,6 +7,21 @@ from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 PAGE_SIZE = 5
 
+MONTHS_GENITIVE: tuple[str, ...] = (
+    "января",
+    "февраля",
+    "марта",
+    "апреля",
+    "мая",
+    "июня",
+    "июля",
+    "августа",
+    "сентября",
+    "октября",
+    "ноября",
+    "декабря",
+)
+
 
 def plural(n: int, one: str, few: str, many: str) -> str:
     if n % 10 == 1 and n % 100 != 11:

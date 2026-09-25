@@ -22,6 +22,7 @@ from src.database import PersonRepository, UserRepository
 from src.database.models import Person
 from src.handlers.birthday_saver import BirthdayDraft, DbBirthdaySaver
 from src.handlers.pagination import (
+    MONTHS_GENITIVE,
     build_pagination_keyboard,
     days_until,
     page_slice,
@@ -35,21 +36,6 @@ from src.handlers.states import AddBirthdaySG, EditBirthdaySG
 router = Router(name="birthdays")
 
 _DATE_RE = re.compile(r"^\s*(\d{1,2})\s*[.\-/\s]\s*(\d{1,2})(?:\s*[.\-/\s]\s*(\d{4}))?\s*$")
-
-MONTHS_GENITIVE: tuple[str, ...] = (
-    "января",
-    "февраля",
-    "марта",
-    "апреля",
-    "мая",
-    "июня",
-    "июля",
-    "августа",
-    "сентября",
-    "октября",
-    "ноября",
-    "декабря",
-)
 
 ADD_CANCEL = "add_bday:cancel"
 ADD_SKIP_NOTE = "add_bday:skip_note"
