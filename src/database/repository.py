@@ -3,13 +3,14 @@
 Репозитории не делают commit — транзакцией управляет вызывающий код.
 """
 
+from datetime import date as date_type
 from datetime import time
 from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.database.models import Person, User, UserSetting
+from src.database.models import Person, SentNotification, User, UserSetting
 
 
 class UserRepository:
@@ -19,6 +20,10 @@ class UserRepository:
     async def get_by_tg_id(self, tg_id: int) -> User | None:
         result = await self._session.execute(select(User).where(User.tg_id == tg_id))
         return result.scalar_one_or_none()
+
+    async def list_all(self) -> list[User]:
+        result = await self._session.execute(select(User))
+        return list(result.scalars().all())
 
     async def get_or_create(
         self, tg_id: int, *, username: str | None = None, time_zone: str = "UTC"
@@ -59,6 +64,14 @@ class PersonRepository:
     async def get(self, person_id: int) -> Person | None:
         result = await self._session.execute(select(Person).where(Person.id == person_id))
         return result.scalar_one_or_none()
+
+    async def list_by_birthdate(self, tg_id: int, day: int, month: int) -> list[Person]:
+        result = await self._session.execute(
+            select(Person).where(
+                Person.tg_id == tg_id, Person.birth_day == day, Person.birth_month == month
+            )
+        )
+        return list(result.scalars().all())
 
     async def create(
         self,
@@ -166,3 +179,35 @@ class UserSettingRepository:
         await self._session.delete(setting)
         await self._session.flush()
         return True
+
+
+class SentNotificationRepository:
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    async def was_sent(
+        self, tg_id: int, person_id: int, setting_id: int, notify_date: date_type
+    ) -> bool:
+        result = await self._session.execute(
+            select(SentNotification).where(
+                SentNotification.tg_id == tg_id,
+                SentNotification.person_id == person_id,
+                SentNotification.setting_id == setting_id,
+                SentNotification.notify_date == notify_date,
+            )
+        )
+        return result.scalar_one_or_none() is not None
+
+    async def mark_sent(
+        self, tg_id: int, person_id: int, setting_id: int, notify_date: date_type
+    ) -> SentNotification:
+        record = SentNotification(
+            tg_id=tg_id,
+            person_id=person_id,
+            setting_id=setting_id,
+            notify_date=notify_date,
+        )
+        self._session.add(record)
+        await self._session.flush()
+        await self._session.refresh(record)
+        return record
