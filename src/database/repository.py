@@ -118,6 +118,14 @@ class UserSettingRepository:
         )
         return result.scalar_one_or_none()
 
+    async def get_by_days(self, tg_id: int, days: int) -> UserSetting | None:
+        result = await self._session.execute(
+            select(UserSetting).where(
+                UserSetting.tg_id == tg_id, UserSetting.notify_days_before == days
+            )
+        )
+        return result.scalar_one_or_none()
+
     async def create(
         self,
         tg_id: int,

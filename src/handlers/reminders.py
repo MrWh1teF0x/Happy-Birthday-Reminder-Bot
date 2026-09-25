@@ -16,7 +16,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.database import UserRepository, UserSettingRepository
 from src.database.models import UserSetting
-from src.handlers.states import EditReminderStates, ReminderStates
+from src.handlers.reminder_saver import DbReminderSaver
+from src.handlers.states import AddReminderSG, EditReminderStates
 
 router = Router(name="reminders")
 
@@ -26,8 +27,48 @@ DELETE_PREFIX = "reminder:del:"
 DELETE_YES_PREFIX = "rdel_yes:"
 DELETE_NO_PREFIX = "rdel_no:"
 FIELD_PREFIX = "redit:"
+ADD_PREFIX = "rem_add:"
+ADD_DAYS_PREFIX = "rem_add:days:"
+ADD_TIME_PREFIX = "rem_add:time:"
+ADD_NEW = "rem_add:new"
+ADD_ALL = "rem_add:all"
+ADD_BACK = "rem_add:back"
+ADD_CANCEL = "rem_add:cancel"
 FIELD_DAYS = "days"
 FIELD_TIME = "time"
+
+DAY_OPTIONS: tuple[tuple[str, int], ...] = (
+    ("🎉 В день праздника (0)", 0),
+    ("⚡ За 1 день", 1),
+    ("🗓 За 3 дня", 3),
+    ("📆 За 7 дней", 7),
+)
+
+TIME_OPTIONS: tuple[str, ...] = ("09:00", "12:00", "18:00", "21:00")
+TIME_LABELS: dict[str, str] = {
+    "09:00": "🌅 09:00",
+    "12:00": "☀️ 12:00",
+    "18:00": "🌆 18:00",
+    "21:00": "🌙 21:00",
+}
+
+STEP1_TEXT = (
+    "🔔 **Шаг 1 из 2: За сколько дней отправлять уведомление?**\n"
+    "\n"
+    "Выберите вариант или напишите число дней текстом (например: `14`):"
+)
+
+STEP2_TEXT = (
+    "⏰ **Шаг 2 из 2: Время отправки**\n"
+    "\n"
+    "Выберите время или напишите его текстом в формате ЧЧ:ММ (например: `09:30`):"
+)
+
+DAYS_ERROR_TEXT = "⚠️ Введите корректное число дней (от 0 до 365)"
+
+TIME_ERROR_TEXT = "⚠️ Некорректный формат времени. Используйте формат ЧЧ:ММ (например: `10:00`)."
+
+ADD_CANCELLED_TEXT = "❌ Добавление напоминания отменено."
 
 FIELD_LABELS: dict[str, str] = {
     FIELD_DAYS: "За сколько дней",
@@ -82,6 +123,66 @@ def build_reminders_keyboard(settings: list[UserSetting]) -> InlineKeyboardMarku
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
+def build_days_keyboard() -> InlineKeyboardMarkup:
+    rows = [
+        [InlineKeyboardButton(text=label, callback_data=f"{ADD_DAYS_PREFIX}{days}")]
+        for label, days in DAY_OPTIONS
+    ]
+    rows.append([InlineKeyboardButton(text="❌ Отмена", callback_data=ADD_CANCEL)])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def build_time_keyboard() -> InlineKeyboardMarkup:
+    times = list(TIME_LABELS.items())
+    rows = [
+        [
+            InlineKeyboardButton(text=label, callback_data=f"{ADD_TIME_PREFIX}{moment}")
+            for moment, label in times[i : i + 2]
+        ]
+        for i in range(0, len(times), 2)
+    ]
+    rows.append(
+        [
+            InlineKeyboardButton(text="◀️ Назад", callback_data=ADD_BACK),
+            InlineKeyboardButton(text="❌ Отмена", callback_data=ADD_CANCEL),
+        ]
+    )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def build_add_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="➕ Добавить напоминание", callback_data=ADD_NEW)]
+        ]
+    )
+
+
+def build_finish_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="➕ Добавить еще", callback_data=ADD_NEW),
+                InlineKeyboardButton(text="⚙️ Все настройки", callback_data=ADD_ALL),
+            ]
+        ]
+    )
+
+
+def format_interval(days: int) -> str:
+    if days == 0:
+        return "в день праздника"
+    return f"за {days} дн."
+
+
+def build_finish_text(setting: UserSetting) -> str:
+    return (
+        "✅ Напоминание сохранено: "
+        f"{format_interval(setting.notify_days_before)} "
+        f"в {setting.notification_time.strftime('%H:%M')}."
+    )
+
+
 def build_reminder_fields_keyboard(setting_id: int) -> InlineKeyboardMarkup:
     rows = [
         [InlineKeyboardButton(text=label, callback_data=f"{FIELD_PREFIX}{setting_id}:{field}")]
@@ -118,7 +219,10 @@ def render_reminders_text(settings: list[UserSetting]) -> str:
 async def show_reminders_list(message: Message, db: AsyncSession, tg_id: int) -> None:
     settings = await UserSettingRepository(db).list_by_user(tg_id)
     if not settings:
-        await message.answer("Оповещений пока нет. Добавь первое: /add_reminder.")
+        await message.answer(
+            "Оповещений пока нет. Добавь первое: /add_reminder.",
+            reply_markup=build_add_keyboard(),
+        )
         return
     await message.answer(
         render_reminders_text(settings),
@@ -148,44 +252,166 @@ async def reminders_list_handler(message: Message, db: AsyncSession) -> None:
     await show_reminders_list(message, db, message.from_user.id)
 
 
-@router.message(Command("add_reminder"))
-async def add_reminder_handler(message: Message, db: AsyncSession, state: FSMContext) -> None:
+async def start_add_flow(message: Message, db: AsyncSession, state: FSMContext) -> None:
     if message.from_user is None:
         return
     await UserRepository(db).get_or_create(
         message.from_user.id, username=message.from_user.username
     )
-    await state.set_state(ReminderStates.waiting_for_days)
-    await message.answer("За сколько дней до дня рождения оповещать? Пришли число от 0 до 365.")
+    await state.set_state(AddReminderSG.waiting_for_days)
+    await message.answer(STEP1_TEXT, reply_markup=build_days_keyboard(), parse_mode="Markdown")
 
 
-@router.message(ReminderStates.waiting_for_days, F.text)
+@router.message(Command("add_reminder"))
+async def add_reminder_handler(message: Message, db: AsyncSession, state: FSMContext) -> None:
+    await start_add_flow(message, db, state)
+
+
+@router.callback_query(F.data == ADD_NEW)
+async def reminder_add_button_handler(
+    callback: CallbackQuery, db: AsyncSession, state: FSMContext
+) -> None:
+    await callback.answer()
+    if not isinstance(callback.message, Message):
+        return
+    if callback.from_user is not None:
+        await UserRepository(db).get_or_create(
+            callback.from_user.id, username=callback.from_user.username
+        )
+    await state.set_state(AddReminderSG.waiting_for_days)
+    await callback.message.edit_text(
+        STEP1_TEXT, reply_markup=build_days_keyboard(), parse_mode="Markdown"
+    )
+
+
+async def proceed_to_time(
+    state: FSMContext, days: int, edit_message: Message | None, answer_to: Message
+) -> None:
+    await state.update_data(days=days)
+    await state.set_state(AddReminderSG.waiting_for_time)
+    if edit_message is not None:
+        await edit_message.edit_text(
+            STEP2_TEXT, reply_markup=build_time_keyboard(), parse_mode="Markdown"
+        )
+    else:
+        await answer_to.answer(
+            STEP2_TEXT, reply_markup=build_time_keyboard(), parse_mode="Markdown"
+        )
+
+
+@router.callback_query(F.data.startswith(ADD_DAYS_PREFIX))
+async def reminder_days_button_handler(callback: CallbackQuery, state: FSMContext) -> None:
+    if callback.data is None or not isinstance(callback.message, Message):
+        return
+    try:
+        days = int(callback.data.removeprefix(ADD_DAYS_PREFIX))
+    except ValueError:
+        await callback.answer("Некорректное число.", show_alert=True)
+        return
+    if parse_days(str(days)) is None:
+        await callback.answer("Некорректное число.", show_alert=True)
+        return
+    await callback.answer()
+    await proceed_to_time(state, days, callback.message, callback.message)
+
+
+@router.message(AddReminderSG.waiting_for_days, F.text)
 async def reminder_days_handler(message: Message, state: FSMContext) -> None:
     days = parse_days(message.text or "")
     if days is None:
-        await message.answer("Нужно число от 0 до 365. Попробуй ещё раз.")
+        await message.answer(DAYS_ERROR_TEXT)
         return
-    await state.update_data(days=days)
-    await state.set_state(ReminderStates.waiting_for_time)
-    await message.answer("Во сколько присылать оповещение? Формат ЧЧ:ММ — например, 09:00.")
+    await proceed_to_time(state, days, None, message)
 
 
-@router.message(ReminderStates.waiting_for_time, F.text)
+async def finish_add_reminder(
+    db: AsyncSession,
+    state: FSMContext,
+    tg_id: int,
+    moment: time_type,
+    edit_message: Message | None,
+    answer_to: Message,
+) -> None:
+    data = await state.get_data()
+    try:
+        days = int(data["days"])
+    except (KeyError, TypeError, ValueError):
+        await state.clear()
+        await answer_to.answer("Что-то пошло не так. Начни заново: /add_reminder.")
+        return
+    setting = await DbReminderSaver(db).save_reminder(tg_id, days, moment)
+    settings = await UserSettingRepository(db).list_by_user(tg_id)
+    await state.clear()
+    text = build_finish_text(setting) + "\n\n" + render_reminders_text(settings)
+    if edit_message is not None:
+        await edit_message.edit_text(
+            text, reply_markup=build_finish_keyboard(), parse_mode="Markdown"
+        )
+    else:
+        await answer_to.answer(text, reply_markup=build_finish_keyboard(), parse_mode="Markdown")
+
+
+@router.callback_query(F.data.startswith(ADD_TIME_PREFIX))
+async def reminder_time_button_handler(
+    callback: CallbackQuery, db: AsyncSession, state: FSMContext
+) -> None:
+    if callback.from_user is None or callback.data is None:
+        return
+    moment = parse_time(callback.data.removeprefix(ADD_TIME_PREFIX))
+    if moment is None or not isinstance(callback.message, Message):
+        await callback.answer("Некорректное время.", show_alert=True)
+        return
+    await callback.answer()
+    await finish_add_reminder(
+        db, state, callback.from_user.id, moment, callback.message, callback.message
+    )
+
+
+@router.message(AddReminderSG.waiting_for_time, F.text)
 async def reminder_time_handler(message: Message, db: AsyncSession, state: FSMContext) -> None:
     if message.from_user is None:
         return
     moment = parse_time(message.text or "")
     if moment is None:
-        await message.answer("Не понял время. Формат ЧЧ:ММ — например, 09:00.")
+        await message.answer(TIME_ERROR_TEXT, parse_mode="Markdown")
         return
-    data = await state.get_data()
-    setting = await UserSettingRepository(db).create(
-        message.from_user.id,
-        notify_days_before=int(data.get("days", 7)),
-        notification_time=moment,
-    )
+    await finish_add_reminder(db, state, message.from_user.id, moment, None, message)
+
+
+@router.callback_query(F.data == ADD_BACK)
+async def reminder_back_handler(callback: CallbackQuery, state: FSMContext) -> None:
+    await state.set_state(AddReminderSG.waiting_for_days)
+    await callback.answer()
+    if isinstance(callback.message, Message):
+        await callback.message.edit_text(
+            STEP1_TEXT, reply_markup=build_days_keyboard(), parse_mode="Markdown"
+        )
+
+
+@router.callback_query(F.data == ADD_CANCEL)
+async def reminder_cancel_handler(callback: CallbackQuery, state: FSMContext) -> None:
     await state.clear()
-    await message.answer(f"Готово! {format_reminder(setting)}\n\nВсе оповещения: /reminders_list.")
+    await callback.answer()
+    if isinstance(callback.message, Message):
+        await callback.message.edit_text(ADD_CANCELLED_TEXT)
+
+
+@router.callback_query(F.data == ADD_ALL)
+async def reminder_all_handler(callback: CallbackQuery, db: AsyncSession) -> None:
+    await callback.answer()
+    if not isinstance(callback.message, Message):
+        return
+    settings = await UserSettingRepository(db).list_by_user(callback.from_user.id)
+    if not settings:
+        await callback.message.edit_text(
+            "Оповещений пока нет. Добавь первое: /add_reminder.",
+            reply_markup=build_add_keyboard(),
+        )
+        return
+    await callback.message.edit_text(
+        render_reminders_text(settings),
+        reply_markup=build_reminders_keyboard(settings),
+    )
 
 
 @router.message(Command("edit_reminder"))

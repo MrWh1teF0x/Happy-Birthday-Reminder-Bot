@@ -16,7 +16,7 @@ class EditBirthdayStates(StatesGroup):
     waiting_for_value = State()
 
 
-class ReminderStates(StatesGroup):
+class AddReminderSG(StatesGroup):
     waiting_for_days = State()
     waiting_for_time = State()
 
