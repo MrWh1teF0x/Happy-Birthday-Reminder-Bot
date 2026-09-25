@@ -61,7 +61,7 @@ DATE_ERROR_TEXT = (
     "⚠️ Некорректный формат даты. Попробуйте еще раз (например: `12.09` или `12.09.1995`)."
 )
 
-CANCELLED_TEXT = "Добавление отменено"
+CANCELLED_TEXT = "❌ Добавление отменено."
 
 
 def step2_text(fullname: str) -> str:
@@ -102,6 +102,12 @@ def build_finish_keyboard() -> InlineKeyboardMarkup:
 def build_add_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[[InlineKeyboardButton(text="➕ Добавить", callback_data=ADD_AGAIN)]]
+    )
+
+
+def build_restart_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[[InlineKeyboardButton(text="➕ Начать заново", callback_data=ADD_AGAIN)]]
     )
 
 
@@ -245,7 +251,7 @@ async def birthday_cancel_handler(callback: CallbackQuery, state: FSMContext) ->
     await state.clear()
     await callback.answer()
     if isinstance(callback.message, Message):
-        await callback.message.edit_text(CANCELLED_TEXT)
+        await callback.message.edit_text(CANCELLED_TEXT, reply_markup=build_restart_keyboard())
 
 
 @router.callback_query(F.data == ADD_AGAIN)

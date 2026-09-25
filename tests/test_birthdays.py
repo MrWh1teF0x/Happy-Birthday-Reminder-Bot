@@ -132,6 +132,8 @@ async def test_add_birthday_cancel_clears_state() -> None:
 
     state.clear.assert_awaited_once()
     assert "отменено" in callback.message.edit_text.await_args.args[0].lower()
+    keyboard = callback.message.edit_text.await_args.kwargs["reply_markup"]
+    assert keyboard.inline_keyboard[0][0].text == "➕ Начать заново"
 
 
 async def test_add_birthday_again_restarts_flow() -> None:
