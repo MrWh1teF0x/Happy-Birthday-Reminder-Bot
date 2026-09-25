@@ -30,6 +30,9 @@ def test_render_help_lists_all_commands() -> None:
 
     for command in BOT_COMMANDS:
         assert f"/{command.command}" in text
+    assert "⚙️ Основные" in text
+    assert "🎂 Дни рождения" in text
+    assert "🔔 Уведомления" in text
 
 
 def test_command_names_are_valid_for_telegram() -> None:

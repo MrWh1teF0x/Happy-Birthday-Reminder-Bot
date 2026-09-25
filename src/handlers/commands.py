@@ -17,8 +17,24 @@ BOT_COMMANDS: tuple[BotCommand, ...] = (
 
 
 def render_help() -> str:
-    lines = [f"/{command.command} — {command.description}" for command in BOT_COMMANDS]
-    return "Что я умею:\n\n" + "\n".join(lines)
+    return (
+        "🛠 Что я умею и какие есть команды:\n"
+        "\n"
+        "⚙️ Основные\n"
+        "🔹 /start — Перезапустить бота и настроить часовой пояс\n"
+        "🔹 /help — Показать это меню с командами\n"
+        "🔹 /edit_utc — Изменить свой часовой пояс\n"
+        "\n"
+        "🎂 Дни рождения\n"
+        "🔹 /add_birthday — Добавить новый день рождения\n"
+        "🔹 /birthdays_list — Посмотреть весь список именинников\n"
+        "🔹 /edit_birthday — Изменить или удалить день рождения\n"
+        "\n"
+        "🔔 Уведомления\n"
+        "🔹 /add_reminder — Настроить время и интервалы напоминаний\n"
+        "🔹 /reminders_list — Посмотреть активные оповещения\n"
+        "🔹 /edit_reminder — Изменить настройки оповещений"
+    )
 
 
 async def setup_commands(bot: Bot) -> None:
