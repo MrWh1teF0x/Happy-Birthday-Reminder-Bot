@@ -18,7 +18,9 @@ config = context.config
 config.set_main_option("sqlalchemy.url", Settings().database_url)  # type: ignore[call-arg]  # поля из окружения/.env
 
 if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+    # Не гасим логгеры бота: env.py выполняется в процессе бота (uv run bot),
+    # fileConfig по умолчанию ставит disabled=True всем существующим логгерам.
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 target_metadata = Base.metadata
 
