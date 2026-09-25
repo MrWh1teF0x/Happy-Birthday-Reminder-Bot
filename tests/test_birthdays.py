@@ -39,7 +39,6 @@ from src.handlers.birthdays import (
     birthday_skip_note_handler,
     birthdays_list_handler,
     birthdays_page_handler,
-    edit_birthday_hint_handler,
     format_birthday,
     format_birthday_long,
     parse_birthday_date,
@@ -437,14 +436,6 @@ async def test_birthday_card_without_year_has_no_age() -> None:
         assert "1 марта" in text
         assert "через" in text
         assert "Исполн" not in text
-
-
-async def test_edit_birthday_hint_points_to_list() -> None:
-    message = make_message("/edit_birthday")
-
-    await edit_birthday_hint_handler(message)
-
-    assert "/birthdays_list" in message.answer.await_args.args[0]
 
 
 async def test_edit_menu_shows_current_data() -> None:

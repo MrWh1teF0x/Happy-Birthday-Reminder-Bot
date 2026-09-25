@@ -17,10 +17,8 @@ async def test_setup_commands_registers_all_commands() -> None:
         "help",
         "add_birthday",
         "birthdays_list",
-        "edit_birthday",
         "reminders_list",
         "add_reminder",
-        "edit_reminder",
         "edit_utc",
     ]
 

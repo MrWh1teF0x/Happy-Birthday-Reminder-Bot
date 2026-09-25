@@ -20,7 +20,6 @@ from src.handlers.reminders import (
     ADD_CANCEL,
     ADD_NEW,
     add_reminder_handler,
-    edit_reminder_hint_handler,
     format_days_full,
     parse_days,
     parse_time,
@@ -333,14 +332,6 @@ async def test_reminders_sorted_chronologically() -> None:
             < text.index("За 1 день")
             < text.index("В день праздника")
         )
-
-
-async def test_edit_reminder_hint_points_to_list() -> None:
-    message = make_message("/edit_reminder")
-
-    await edit_reminder_hint_handler(message)
-
-    assert "/reminders_list" in message.answer.await_args.args[0]
 
 
 async def test_time_edit_flow_changes_time() -> None:

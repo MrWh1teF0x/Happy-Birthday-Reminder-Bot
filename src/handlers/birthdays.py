@@ -473,13 +473,6 @@ async def birthdays_page_handler(
     await edit_birthdays_page(callback.message, db, callback.from_user.id, page, state)
 
 
-@router.message(Command("edit_birthday"))
-async def edit_birthday_hint_handler(message: Message) -> None:
-    await message.answer(
-        "Чтобы изменить день рождения, открой /birthdays_list и нажми ✏️ под нужной записью."
-    )
-
-
 @router.callback_query(F.data.startswith(EDIT_BDAY_PREFIX))
 async def birthday_edit_button_handler(
     callback: CallbackQuery, db: AsyncSession, state: FSMContext

@@ -462,13 +462,6 @@ async def reminder_all_handler(
     await edit_reminders_page(callback.message, db, callback.from_user.id, page, state)
 
 
-@router.message(Command("edit_reminder"))
-async def edit_reminder_hint_handler(message: Message) -> None:
-    await message.answer(
-        "Чтобы изменить время оповещения, открой /reminders_list и нажми ⏰ под нужной записью."
-    )
-
-
 def build_time_edit_text(setting: UserSetting) -> str:
     current = setting.notification_time.strftime("%H:%M")
     return (
