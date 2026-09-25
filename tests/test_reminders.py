@@ -166,14 +166,17 @@ async def test_add_reminder_back_returns_to_days() -> None:
     assert "Шаг 1 из 2" in callback.message.edit_text.await_args.args[0]
 
 
-async def test_add_reminder_cancel() -> None:
-    state = make_state({"days": 3})
-    callback = make_callback(ADD_CANCEL)
+async def test_add_reminder_cancel_returns_to_list() -> None:
+    async for session in make_session():
+        await UserRepository(session).get_or_create(123)
+        await seed_setting(session)
+        state = make_state({"days": 3})
+        callback = make_callback(ADD_CANCEL)
 
-    await reminder_cancel_handler(callback, state)
+        await reminder_cancel_handler(callback, session, state)
 
-    state.clear.assert_awaited_once()
-    assert "отменено" in callback.message.edit_text.await_args.args[0].lower()
+        state.clear.assert_awaited_once()
+        assert "Список напоминаний" in callback.message.edit_text.await_args.args[0]
 
 
 async def test_add_reminder_new_and_all_buttons() -> None:
@@ -188,7 +191,7 @@ async def test_add_reminder_new_and_all_buttons() -> None:
 
         callback = make_callback(ADD_ALL)
         await reminder_all_handler(callback, session, make_state())
-        assert "Настройки напоминаний" in callback.message.edit_text.await_args.args[0]
+        assert "Список напоминаний" in callback.message.edit_text.await_args.args[0]
 
 
 async def test_saver_service_dedupes() -> None:
@@ -279,16 +282,16 @@ async def test_reminders_list_card_page() -> None:
         await reminders_list_handler(message, session, AsyncMock())
 
         text = message.answer.await_args.args[0]
-        assert "Настройки напоминаний" in text
+        assert "Список напоминаний" in text
         assert "Всего: 1, UTC+3" in text
-        assert "1️⃣" in text
+        assert "⏰ 1." in text
         assert "За 7 дней" in text
         assert "отправка в 09:00" in text
         keyboard = message.answer.await_args.kwargs["reply_markup"]
         assert len(keyboard.inline_keyboard) == 1
         row = keyboard.inline_keyboard[0]
-        assert row[0].text == "⏰ Изменить время (7 дн)"
-        assert row[1].text == "🗑 Удалить"
+        assert row[0].text == "✏️ 7 дн"
+        assert row[1].text == "🗑 7 дн"
 
 
 async def test_reminders_pagination() -> None:
@@ -304,14 +307,14 @@ async def test_reminders_pagination() -> None:
         keyboard = message.answer.await_args.kwargs["reply_markup"]
         assert len(keyboard.inline_keyboard) == 6
         nav = keyboard.inline_keyboard[5]
-        assert [button.text for button in nav] == ["1 / 2", "Вперед ➡️"]
+        assert [button.text for button in nav] == ["1 / 2", "Стр. 2 ➡️"]
 
         callback = make_callback("rem_page:2")
         await reminders_page_handler(callback, session, state)
 
         rows = callback.message.edit_text.await_args.kwargs["reply_markup"].inline_keyboard
         assert len(rows) == 2
-        assert [button.text for button in rows[-1]] == ["⬅️ Назад", "2 / 2"]
+        assert [button.text for button in rows[-1]] == ["⬅️ Стр. 1", "2 / 2"]
 
 
 async def test_reminders_sorted_chronologically() -> None:
@@ -417,7 +420,7 @@ async def test_delete_cancel_returns_to_list() -> None:
         await reminder_delete_no_handler(callback, session, state)
 
         assert await UserSettingRepository(session).get(setting_id) is not None
-        assert "Настройки напоминаний" in callback.message.edit_text.await_args.args[0]
+        assert "Список напоминаний" in callback.message.edit_text.await_args.args[0]
 
 
 async def test_delete_last_on_page_returns_to_previous() -> None:

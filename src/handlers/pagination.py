@@ -48,12 +48,6 @@ def build_pagination_keyboard(
     return InlineKeyboardMarkup(inline_keyboard=[row])
 
 
-def keycap_number(n: int) -> str:
-    if 1 <= n <= 9:
-        return f"{n}\ufe0f\u20e3"
-    return f"{n}."
-
-
 def next_occurrence(day: int, month: int, today: date) -> date:
     """Ближайшая дата ДР (29.02 в невисокосный год — 28.02)."""
     year = today.year

@@ -147,7 +147,7 @@ def build_finish_text(draft: BirthdayDraft) -> str:
         "\n"
         f"👤 **Именинник:** {draft.fullname}\n"
         f"📅 **Дата:** {date}\n"
-        f"🎁 **Заметка:** {note}"
+        f"📝 **Заметка:** {note}"
     )
 
 
@@ -397,7 +397,7 @@ def build_birthday_card(person: Person, index: int, today: date) -> str:
     if age is not None:
         lines.append(f"🎂 {age_verb}: {age} {plural(age, 'год', 'года', 'лет')}")
     if person.notes:
-        lines.append(f"🎁 *«{person.notes}»*")
+        lines.append(f"📝 *«{person.notes}»*")
     return "\n".join(lines)
 
 

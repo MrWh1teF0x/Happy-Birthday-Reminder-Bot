@@ -22,7 +22,6 @@ from src.database import UserRepository, UserSettingRepository
 from src.database.models import UserSetting
 from src.handlers.pagination import (
     build_pagination_keyboard,
-    keycap_number,
     page_slice,
     paginate,
     plural,
@@ -76,8 +75,6 @@ STEP2_TEXT = (
     "\n"
     "Выберите время или напишите его текстом в формате ЧЧ:ММ (например: `09:30`):"
 )
-
-ADD_CANCELLED_TEXT = "❌ Добавление напоминания отменено."
 
 DAYS_PROMPT_KEY = "days_prompt_id"
 TIME_PROMPT_KEY = "time_prompt_id"
@@ -139,11 +136,11 @@ def format_days_full(days: int) -> str:
 def build_reminder_card(setting: UserSetting, index: int) -> str:
     days = format_days_full(setting.notify_days_before)
     time = setting.notification_time.strftime("%H:%M")
-    return f"{keycap_number(index)} **{days}** — отправка в {time}"
+    return f"⏰ {index}. **{days}** — отправка в {time}"
 
 
 def build_reminders_page_text(settings: list[UserSetting], page: int, utc: str) -> str:
-    header = f"🔔 **Настройки напоминаний** *(Всего: {len(settings)}, {utc})*"
+    header = f"🔔 **Список напоминаний** *(Всего: {len(settings)}, {utc})*"
     offset = (page - 1) * 5
     cards = [
         build_reminder_card(setting, offset + i + 1)
@@ -158,14 +155,17 @@ def build_reminders_page_keyboard(
     rows: list[list[InlineKeyboardButton]] = [
         [
             InlineKeyboardButton(
-                text=f"⏰ Изменить время ({setting.notify_days_before} дн)",
+                text=f"✏️ {setting.notify_days_before} дн",
                 callback_data=f"{EDIT_REM_PREFIX}{setting.id}",
             ),
-            InlineKeyboardButton(text="🗑 Удалить", callback_data=f"{DEL_REM_PREFIX}{setting.id}"),
+            InlineKeyboardButton(
+                text=f"🗑 {setting.notify_days_before} дн",
+                callback_data=f"{DEL_REM_PREFIX}{setting.id}",
+            ),
         ]
         for setting in settings[page_slice(page)]
     ]
-    nav = build_pagination_keyboard(REM_PAGE_PREFIX, page, total_pages)
+    nav = build_pagination_keyboard(REM_PAGE_PREFIX, page, total_pages, numbered_nav=True)
     if nav is not None:
         rows.extend(nav.inline_keyboard)
     return InlineKeyboardMarkup(inline_keyboard=rows)
@@ -441,11 +441,13 @@ async def reminder_back_handler(callback: CallbackQuery, state: FSMContext) -> N
 
 
 @router.callback_query(F.data == ADD_CANCEL)
-async def reminder_cancel_handler(callback: CallbackQuery, state: FSMContext) -> None:
+async def reminder_cancel_handler(
+    callback: CallbackQuery, db: AsyncSession, state: FSMContext
+) -> None:
     await state.clear()
     await callback.answer()
     if isinstance(callback.message, Message):
-        await callback.message.edit_text(ADD_CANCELLED_TEXT)
+        await edit_reminders_page(callback.message, db, callback.from_user.id, 1, state)
 
 
 @router.callback_query(F.data == ADD_ALL)
